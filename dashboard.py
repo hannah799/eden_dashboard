@@ -188,9 +188,15 @@ def load_data():
         })
     al_df = pd.DataFrame(al_records)
 
-    # ── 5. Harvest Tracker ────────────────────────────────────────────────────
-    HARVEST_PATH = "harvest_tracker.xlsx"
-    wb2 = openpyxl.load_workbook(HARVEST_PATH, read_only=True, data_only=True)
+    return inv_df, bio_df, sw_df, al_df
+
+
+inv_df, bio_df, sw_df, al_df = load_data()
+
+
+@st.cache_data(ttl=300)
+def load_harvest():
+    wb2 = openpyxl.load_workbook("harvest_tracker.xlsx", read_only=True, data_only=True)
     ws5 = wb2["harvest tracker"]
     h_rows = list(ws5.iter_rows(values_only=True))
     h_records = []
@@ -218,12 +224,7 @@ def load_data():
             "test_date":        r[26] if hasattr(r[26], "year") else None,
             "grade":            r[27],
         })
-    harvest_df = pd.DataFrame(h_records)
-
-    return inv_df, bio_df, sw_df, al_df, harvest_df
-
-
-inv_df, bio_df, sw_df, al_df, harvest_df = load_data()
+    return pd.DataFrame(h_records)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -308,21 +309,26 @@ DISP_ORGS  = {
 vault_df = fin_df[fin_df["location"].isin(VAULT_LOCS)]
 disp_df  = fin_df[fin_df["org"].isin(DISP_ORGS.keys()) & ~fin_df["location"].isin(VAULT_LOCS)]
 
-# Harvest pre-compute
-h = harvest_df.copy()
-h["harvest_date"] = pd.to_datetime(h["harvest_date"], errors="coerce")
-h["dry_lbs"]  = h["dry_weight_g"]  / G_PER_LB
-h["wet_lbs"]  = h["wet_weight_g"]  / G_PER_LB
-h["ff_lbs"]   = h["fresh_frozen_g"] / G_PER_LB
-h["trim_lbs"] = h["trim_weight_g"] / G_PER_LB
-h["flower_lbs"] = h["trimmed_flower_g"] / G_PER_LB
-h["month"] = h["harvest_date"].dt.to_period("M").apply(
-    lambda x: x.start_time if pd.notna(x) else pd.NaT
-)
-
-harvested = h[h["status"] == "Harvested"].copy()
-active     = h[h["status"].isin(["Flowering", "Moved to Trim Room"])].copy()
-upcoming   = h[h["status"] == "Upcoming Cycle"].copy()
+# Harvest pre-compute (isolated so a failure doesn't kill the main tabs)
+_harvest_error = None
+try:
+    harvest_df = load_harvest()
+    h = harvest_df.copy()
+    h["harvest_date"] = pd.to_datetime(h["harvest_date"], errors="coerce")
+    h["dry_lbs"]  = h["dry_weight_g"]  / G_PER_LB
+    h["wet_lbs"]  = h["wet_weight_g"]  / G_PER_LB
+    h["ff_lbs"]   = h["fresh_frozen_g"] / G_PER_LB
+    h["trim_lbs"] = h["trim_weight_g"] / G_PER_LB
+    h["flower_lbs"] = h["trimmed_flower_g"] / G_PER_LB
+    h["month"] = h["harvest_date"].dt.to_period("M").apply(
+        lambda x: x.start_time if pd.notna(x) else pd.NaT
+    )
+    harvested = h[h["status"] == "Harvested"].copy()
+    active     = h[h["status"].isin(["Flowering", "Moved to Trim Room"])].copy()
+    upcoming   = h[h["status"] == "Upcoming Cycle"].copy()
+except Exception as e:
+    _harvest_error = str(e)
+    harvested = active = upcoming = pd.DataFrame()
 
 # Pipeline bulk totals (needed in narrative banner)
 pipeline_bio = bio_df[
@@ -579,6 +585,10 @@ with tab1:
 with tab2:
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
+    if _harvest_error:
+        st.error(f"Harvest data error: {_harvest_error}")
+        st.stop()
+
     total_cycles  = len(harvested)
     total_dry_lbs = harvested["dry_lbs"].sum()
     total_ff_lbs  = harvested["ff_lbs"].sum()
