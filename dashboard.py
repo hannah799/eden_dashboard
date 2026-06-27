@@ -490,13 +490,18 @@ if view == "Supply & Demand":
             gross=("gross","sum")).reset_index().sort_values("gross", ascending=True)
         fig5 = go.Figure(go.Bar(
             x=cat_total["gross"], y=cat_total["category"], orientation="h",
-            marker_color=[COLORS.get(c, "#2e7bc4") for c in cat_total["category"]],
+            marker_color=[COLORS.get(c, "#2563eb") for c in cat_total["category"]],
             text=cat_total["gross"].apply(lambda x: f"${x:,.0f}"),
-            textposition="outside", textfont=dict(color=TEXT_COLOR, size=11),
+            textposition="outside", textfont=dict(color="#374151", size=11),
+            cliponaxis=False,
             hovertemplate="%{y}  $%{x:,.0f}<extra></extra>",
         ))
         chart_layout(fig5, "Gross Sales by Category", height=300)
-        fig5.update_layout(xaxis_title="", yaxis=dict(gridcolor="rgba(0,0,0,0)"))
+        fig5.update_layout(
+            xaxis_title="", xaxis=dict(range=[0, cat_total["gross"].max() * 1.25]),
+            yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+            margin=dict(l=10, r=80, t=40, b=10),
+        )
         st.plotly_chart(fig5, use_container_width=True)
 
     with col_loc:
@@ -722,7 +727,8 @@ if view == "Harvest":
             x=room_agg["room"], y=room_agg["dry_per_plant"],
             marker_color=[ROOM_COLORS.get(r,"#888") for r in room_agg["room"]],
             text=room_agg["dry_per_plant"].apply(lambda x: f"{x:.3f}"),
-            textposition="outside", textfont=dict(color=TEXT_COLOR),
+            textposition="outside", textfont=dict(color="#374151"),
+            cliponaxis=False,
             hovertemplate="%{x}  %{y:.3f} lbs/plant<extra></extra>",
         ))
         chart_layout(fig_eff, "Avg Dry Yield per Plant (lbs)", height=300)
@@ -761,11 +767,12 @@ if view == "Harvest":
                 text=thc_data.apply(
                     lambda r: f"{r['thc_pct']:.1f}%  {r['terps_pct']:.2f}% terps"
                               if r["terps_pct"] else f"{r['thc_pct']:.1f}%", axis=1),
-                textposition="outside", textfont=dict(color=TEXT_COLOR, size=11),
+                textposition="outside", textfont=dict(color="#374151", size=11),
+                cliponaxis=False,
                 hovertemplate="%{y}  THC %{x:.1f}%<extra></extra>",
             ))
             chart_layout(fig_thc, "COA Results — THC %", height=240)
-            fig_thc.update_layout(xaxis=dict(range=[0, max(thc_data["thc_pct"]) * 1.4]),
+            fig_thc.update_layout(xaxis=dict(range=[0, max(thc_data["thc_pct"]) * 1.5]),
                                   yaxis=dict(gridcolor="rgba(0,0,0,0)"))
             st.plotly_chart(fig_thc, use_container_width=True)
 
