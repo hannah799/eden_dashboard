@@ -18,7 +18,8 @@ st.markdown("""
   [data-testid="stAppViewContainer"] { background: #f0f6f0; }
   [data-testid="stHeader"] { background: rgba(240,246,240,0.9); }
   .main .block-container { padding-top: 1.5rem; max-width: 1400px; margin: 0 auto; }
-  #MainMenu, footer { display: none; }
+  #MainMenu { display: none; }
+  [data-testid="stFooter"] { display: none; }
 
   .kpi-card {
     background: #ffffff;
@@ -309,26 +310,33 @@ DISP_ORGS  = {
 vault_df = fin_df[fin_df["location"].isin(VAULT_LOCS)]
 disp_df  = fin_df[fin_df["org"].isin(DISP_ORGS.keys()) & ~fin_df["location"].isin(VAULT_LOCS)]
 
-# Harvest pre-compute (isolated so a failure doesn't kill the main tabs)
+# Harvest pre-compute — always produces DataFrames with correct columns
 _harvest_error = None
+_EMPTY_H = pd.DataFrame(columns=[
+    "strain","harvest_date","status","cycle","room","num_plants",
+    "fresh_frozen_g","wet_weight_g","dry_weight_g","sf_canopy","grams_per_sf",
+    "trim_weight_g","trimmed_flower_g","est_35_units","est_1g_units","designation",
+    "thc_pct","terps_pct","test_date","grade",
+    "dry_lbs","wet_lbs","ff_lbs","trim_lbs","flower_lbs","month",
+])
 try:
     harvest_df = load_harvest()
     h = harvest_df.copy()
     h["harvest_date"] = pd.to_datetime(h["harvest_date"], errors="coerce")
-    h["dry_lbs"]  = h["dry_weight_g"]  / G_PER_LB
-    h["wet_lbs"]  = h["wet_weight_g"]  / G_PER_LB
-    h["ff_lbs"]   = h["fresh_frozen_g"] / G_PER_LB
-    h["trim_lbs"] = h["trim_weight_g"] / G_PER_LB
+    h["dry_lbs"]    = h["dry_weight_g"]  / G_PER_LB
+    h["wet_lbs"]    = h["wet_weight_g"]  / G_PER_LB
+    h["ff_lbs"]     = h["fresh_frozen_g"] / G_PER_LB
+    h["trim_lbs"]   = h["trim_weight_g"] / G_PER_LB
     h["flower_lbs"] = h["trimmed_flower_g"] / G_PER_LB
     h["month"] = h["harvest_date"].dt.to_period("M").apply(
         lambda x: x.start_time if pd.notna(x) else pd.NaT
     )
     harvested = h[h["status"] == "Harvested"].copy()
-    active     = h[h["status"].isin(["Flowering", "Moved to Trim Room"])].copy()
-    upcoming   = h[h["status"] == "Upcoming Cycle"].copy()
+    active    = h[h["status"].isin(["Flowering", "Moved to Trim Room"])].copy()
+    upcoming  = h[h["status"] == "Upcoming Cycle"].copy()
 except Exception as e:
     _harvest_error = str(e)
-    harvested = active = upcoming = pd.DataFrame()
+    harvested = active = upcoming = _EMPTY_H.copy()
 
 # Pipeline bulk totals (needed in narrative banner)
 pipeline_bio = bio_df[
@@ -586,8 +594,7 @@ with tab2:
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
     if _harvest_error:
-        st.error(f"Harvest data error: {_harvest_error}")
-        st.stop()
+        st.error(f"Could not load harvest data: {_harvest_error}")
 
     total_cycles  = len(harvested)
     total_dry_lbs = harvested["dry_lbs"].sum()
