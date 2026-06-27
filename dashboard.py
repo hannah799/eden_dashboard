@@ -63,22 +63,24 @@ st.markdown("""
   .story-head { color: #111827; font-size: 1.05rem; font-weight: 700; margin: 0 0 4px 0; }
   .story-sub  { color: #6b7280; font-size: 0.80rem; margin: 0; }
 
-  div[data-testid="stRadio"] { border-bottom: 1px solid #e5e7eb; margin-bottom: 20px; }
-  div[data-testid="stRadio"] > div { gap: 0 !important; }
+  div[data-testid="stRadio"] { border-bottom: 2px solid #e5e7eb; margin-bottom: 24px; }
+  div[data-testid="stRadio"] > div { gap: 0 !important; flex-wrap: nowrap; }
   div[data-testid="stRadio"] label {
-    display: inline-flex; align-items: center; gap: 0;
-    padding: 8px 24px 10px 24px;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
+    display: inline-flex; align-items: center;
+    padding: 8px 28px 12px 28px;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
     cursor: pointer;
-    font-weight: 500; font-size: 0.92rem; color: #6b7280;
+    font-weight: 600; font-size: 0.95rem; color: #374151;
   }
   div[data-testid="stRadio"] label:has(input:checked) {
     color: #1a4731;
-    border-bottom: 2px solid #1a4731;
+    border-bottom: 3px solid #1a4731;
   }
-  div[data-testid="stRadio"] label span { margin-left: 0 !important; }
-  div[data-testid="stRadio"] label input[type="radio"] { display: none; }
+  div[data-testid="stRadio"] label > div:first-child {
+    width: 0 !important; height: 0 !important; margin: 0 !important;
+    overflow: hidden; border: none !important; background: none !important;
+  }
 
   h1 { color: #111827 !important; }
   h2, h3 { color: #1f2937 !important; }
@@ -391,7 +393,7 @@ if view == "Supply & Demand":
         (k2, "YTD Net Revenue",  f"${ytd_net:,.0f}",         "After discounts"),
         (k3, "Units Sold YTD",   f"{int(ytd_qty):,}",        "All locations"),
         (k4, "On-Hand Units",    f"{total_finished:,}",       "Dispensaries + hub"),
-        (k5, "Bulk Pipeline",    f"{flower_lbs:,.0f} lbs / {mfg_L:.1f} L", "Flower / concentrate"),
+        (k5, "Bulk Pipeline",    f"{flower_lbs:,.0f} lbs  ·  {mfg_L:.1f} L", "Flower  ·  Concentrate"),
     ]:
         with col:
             st.markdown(f"""<div class="kpi-card">
