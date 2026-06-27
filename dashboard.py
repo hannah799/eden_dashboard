@@ -63,6 +63,21 @@ st.markdown("""
   .story-head { color: #111827; font-size: 1.05rem; font-weight: 700; margin: 0 0 4px 0; }
   .story-sub  { color: #6b7280; font-size: 0.80rem; margin: 0; }
 
+  div[data-testid="stRadio"] > div { gap: 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 16px; }
+  div[data-testid="stRadio"] label {
+    padding: 8px 20px 10px 20px;
+    border-bottom: 2px solid transparent;
+    color: #6b7280;
+    font-weight: 500;
+    font-size: 0.9rem;
+    margin-bottom: -1px;
+  }
+  div[data-testid="stRadio"] label:has(input:checked) {
+    color: #1a4731;
+    border-bottom: 2px solid #1a4731;
+  }
+  div[data-testid="stRadio"] div[data-testid="stMarkdownContainer"] { display: none; }
+
   h1 { color: #111827 !important; }
   h2, h3 { color: #1f2937 !important; }
   hr { border-color: #e5e7eb !important; }
@@ -358,10 +373,9 @@ st.markdown(f"""<div class="story-banner">
 </div>""", unsafe_allow_html=True)
 
 
-tab1, tab2 = st.tabs(["Supply & Demand", "Harvest"])
+view = st.radio("", ["Supply & Demand", "Harvest"], horizontal=True, label_visibility="collapsed")
 
-
-with tab1:
+if view == "Supply & Demand":
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
     k1, k2, k3, k4, k5 = st.columns(5)
@@ -590,7 +604,7 @@ with tab1:
         </div>""", unsafe_allow_html=True)
 
 
-with tab2:
+if view == "Harvest":
 
     # ── KPIs ──────────────────────────────────────────────────────────────────
     if _harvest_error:
