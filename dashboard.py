@@ -63,20 +63,22 @@ st.markdown("""
   .story-head { color: #111827; font-size: 1.05rem; font-weight: 700; margin: 0 0 4px 0; }
   .story-sub  { color: #6b7280; font-size: 0.80rem; margin: 0; }
 
-  div[data-testid="stRadio"] > div { gap: 0; border-bottom: 1px solid #e5e7eb; margin-bottom: 16px; }
+  div[data-testid="stRadio"] { border-bottom: 1px solid #e5e7eb; margin-bottom: 20px; }
+  div[data-testid="stRadio"] > div { gap: 0 !important; }
   div[data-testid="stRadio"] label {
-    padding: 8px 20px 10px 20px;
+    display: inline-flex; align-items: center; gap: 0;
+    padding: 8px 24px 10px 24px;
     border-bottom: 2px solid transparent;
-    color: #6b7280;
-    font-weight: 500;
-    font-size: 0.9rem;
     margin-bottom: -1px;
+    cursor: pointer;
+    font-weight: 500; font-size: 0.92rem; color: #6b7280;
   }
   div[data-testid="stRadio"] label:has(input:checked) {
     color: #1a4731;
     border-bottom: 2px solid #1a4731;
   }
-  div[data-testid="stRadio"] div[data-testid="stMarkdownContainer"] { display: none; }
+  div[data-testid="stRadio"] label span { margin-left: 0 !important; }
+  div[data-testid="stRadio"] label input[type="radio"] { display: none; }
 
   h1 { color: #111827 !important; }
   h2, h3 { color: #1f2937 !important; }
