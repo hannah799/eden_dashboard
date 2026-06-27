@@ -1,0 +1,23 @@
+# Temp Excel lock files
+~$*.xlsx
+
+# Sensitive / unrelated files
+Due Diligence Request for Eden DO (Completed).pdf
+Eden Plan.v4 (1).xlsx
+Eden_Investor_Reporting_Pack.v2 (1).xlsx
+Eden_Marketing_Budget (1).xlsx
+Eden_Patient_Activation_Marketing_Plan (1).docx
+fwdrecatchupnexttues.zip
+Resinate Assessment Sept 1.pdf
+Inventory Valuation Summary 612026 1116 AM.xlsx
+Sales 612026 1110 AM (DELIVERY).xlsx
+Sales 612026 1110 AM COCOA BEACH.xlsx
+Sales 612026 1111 AM - ORLANDO.xlsx
+Sales 612026 1113 AM TAMPA.xlsx
+Sales 612026 1114 AM SARASOTA.xlsx
+Harvest_Tracker_1782498265 (1).xlsx
+
+# Python
+__pycache__/
+*.pyc
+.env
