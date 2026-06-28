@@ -628,7 +628,7 @@ if view == "Supply & Demand":
                 hovertemplate="%{x|%b %Y}  $%{y:,.0f}<extra>" + store + "</extra>",
             ))
         fig7.update_layout(
-            barmode="group", yaxis_title="",
+            barmode="stack", yaxis_title="",
             legend=dict(orientation="h", y=1.1),
             xaxis=dict(tickformat="%b %Y"),
         )
