@@ -214,10 +214,6 @@ def load_data():
     return inv_df, bio_df, sw_df, al_df
 
 
-inv_df, bio_df, sw_df, al_df = load_data()
-store_df = load_store_sales()
-
-
 @st.cache_data(ttl=300)
 def load_store_sales():
     """Load per-store Sweed exports: Cocoa Beach, Orlando, Sarasota, Delivery (May 1–Jun 1 2026)."""
@@ -263,6 +259,10 @@ def load_store_sales():
     if records:
         return pd.DataFrame(records)
     return pd.DataFrame(columns=["store", "product", "category", "qty", "gross"])
+
+
+inv_df, bio_df, sw_df, al_df = load_data()
+store_df = load_store_sales()
 
 
 @st.cache_data(ttl=300)
