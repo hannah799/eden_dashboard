@@ -215,6 +215,54 @@ def load_data():
 
 
 inv_df, bio_df, sw_df, al_df = load_data()
+store_df = load_store_sales()
+
+
+@st.cache_data(ttl=300)
+def load_store_sales():
+    """Load per-store Sweed exports: Cocoa Beach, Orlando, Sarasota, Delivery (May 1–Jun 1 2026)."""
+    import os
+
+    def _cat_from_product(name):
+        n = (name or "").lower()
+        if "whole flower" in n:                          return "Flower"
+        if "pre-roll" in n:                              return "Pre-rolls"
+        if "vape pen" in n or "disposable" in n:        return "Carts"
+        if "rosin" in n:                                 return "Concentrates"
+        if "edible" in n:                                return "Edibles"
+        if "tincture" in n:                              return "Tinctures"
+        if "topical" in n:                               return "Topical"
+        return "Other"
+
+    store_map = {}
+    for f in os.listdir("."):
+        if "COCOA BEACH" in f:                          store_map[f] = "Eden - Cocoa Beach"
+        elif "ORLANDO" in f:                            store_map[f] = "Eden - Orlando"
+        elif "SARASOTA" in f and "DELIVERY" not in f:  store_map[f] = "Eden - Sarasota"
+        elif "DELIVERY" in f and f.endswith(".xlsx"):   store_map[f] = "Eden - Delivery Hub"
+        # Skip Tampa — sw_df covers it more completely (Mar–Jun vs May only)
+
+    records = []
+    for fname, store in store_map.items():
+        wb = openpyxl.load_workbook(fname, read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        # rows[0-2]=metadata, rows[3]=header, rows[4]=TOTAL (skip), rows[5+]=products
+        for r in rows[5:]:
+            if not r[0] or r[0] == "TOTAL":
+                continue
+            records.append({
+                "store":    store,
+                "product":  r[0],
+                "category": _cat_from_product(r[0]),
+                "qty":      float(r[2] or 0),
+                "gross":    float(r[4] or 0),
+            })
+        wb.close()
+
+    if records:
+        return pd.DataFrame(records)
+    return pd.DataFrame(columns=["store", "product", "category", "qty", "gross"])
 
 
 @st.cache_data(ttl=300)
@@ -265,9 +313,12 @@ LOC_MAP = {
 }
 al_df["loc_norm"] = al_df["location"].map(LOC_MAP).fillna(al_df["location"])
 
-ytd_gross = al_df["gross"].sum() + sw_df["gross"].sum()
-ytd_net   = al_df["net"].sum()   + sw_df["net"].sum()
-ytd_qty   = al_df["qty"].sum()   + sw_df["qty"].sum()
+# Exclude Tampa from Alleaves — sw_df covers Tampa more completely (Mar–Jun vs Jan–Apr)
+al_notampa = al_df[al_df["loc_norm"] != "Eden - Tampa"]
+
+ytd_gross = sw_df["gross"].sum() + al_notampa["gross"].sum() + store_df["gross"].sum()
+ytd_net   = sw_df["net"].sum()   + al_notampa["net"].sum()
+ytd_qty   = sw_df["qty"].sum()   + al_notampa["qty"].sum()  + store_df["qty"].sum()
 sw_total_gross = sw_df["gross"].sum()
 
 EXCLUDE_LOCS = {"Quarantine", "Quarantine 1283", "temp hoLDING"}
@@ -486,10 +537,11 @@ if view == "Supply & Demand":
 
     col_cat, col_loc = st.columns(2)
     with col_cat:
-        sw_cat = sw_df.groupby("category").agg(gross=("gross","sum")).reset_index()
-        al_cat = al_df.groupby("cat_norm").agg(gross=("gross","sum")).reset_index()
+        sw_cat    = sw_df.groupby("category").agg(gross=("gross","sum")).reset_index()
+        al_cat    = al_notampa.groupby("cat_norm").agg(gross=("gross","sum")).reset_index()
         al_cat.rename(columns={"cat_norm": "category"}, inplace=True)
-        cat_total = pd.concat([sw_cat, al_cat]).groupby("category").agg(
+        store_cat = store_df.groupby("category").agg(gross=("gross","sum")).reset_index()
+        cat_total = pd.concat([sw_cat, al_cat, store_cat]).groupby("category").agg(
             gross=("gross","sum")).reset_index().sort_values("gross", ascending=True)
         fig5 = go.Figure(go.Bar(
             x=cat_total["gross"], y=cat_total["category"], orientation="h",
@@ -508,21 +560,34 @@ if view == "Supply & Demand":
         st.plotly_chart(fig5, use_container_width=True)
 
     with col_loc:
-        al_loc = al_df.groupby("loc_norm").agg(gross=("gross","sum")).reset_index()
-        sw_loc = sw_df.groupby("store").agg(gross=("gross","sum")).reset_index()
-        sw_loc.rename(columns={"store": "loc_norm"}, inplace=True)
-        al_loc["period"] = "Jan–Apr"
-        sw_loc["period"] = "Mar–Jun (Tampa)"
-        loc_all = pd.concat([al_loc, sw_loc])
-        fig6 = go.Figure()
-        for period, color in [("Jan–Apr", "#2563eb"), ("Mar–Jun (Tampa)", "#2d6a4f")]:
-            d = loc_all[loc_all["period"] == period]
-            fig6.add_trace(go.Bar(name=period, x=d["loc_norm"], y=d["gross"],
-                                  marker_color=color,
-                                  hovertemplate="%{x}  $%{y:,.0f}<extra>" + period + "</extra>"))
-        fig6.update_layout(barmode="group", yaxis_title="",
-                           legend=dict(orientation="h", y=1.1))
+        sw_loc    = sw_df.groupby("store").agg(gross=("gross","sum")).reset_index()
+        sw_loc.rename(columns={"store": "location"}, inplace=True)
+        al_loc    = al_notampa.groupby("loc_norm").agg(gross=("gross","sum")).reset_index()
+        al_loc.rename(columns={"loc_norm": "location"}, inplace=True)
+        store_loc = store_df.groupby("store").agg(gross=("gross","sum")).reset_index()
+        store_loc.rename(columns={"store": "location"}, inplace=True)
+        loc_combined = (
+            pd.concat([sw_loc, al_loc, store_loc])
+            .groupby("location").agg(gross=("gross","sum"))
+            .reset_index()
+            .sort_values("gross", ascending=True)
+        )
+        loc_combined["loc_short"] = loc_combined["location"].str.replace("Eden - ", "", regex=False)
+        fig6 = go.Figure(go.Bar(
+            x=loc_combined["gross"], y=loc_combined["loc_short"], orientation="h",
+            marker_color="#2d6a4f",
+            text=loc_combined["gross"].apply(lambda x: f"${x:,.0f}"),
+            textposition="outside", textfont=dict(color="#374151", size=11),
+            cliponaxis=False,
+            hovertemplate="%{y}  $%{x:,.0f}<extra></extra>",
+        ))
         chart_layout(fig6, "Gross Sales by Location", height=300)
+        fig6.update_layout(
+            xaxis_title="",
+            xaxis=dict(range=[0, loc_combined["gross"].max() * 1.30]),
+            yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+            margin=dict(l=10, r=110, t=40, b=10),
+        )
         st.plotly_chart(fig6, use_container_width=True)
 
     col_trend, col_pie = st.columns([3, 2])
@@ -541,16 +606,17 @@ if view == "Supply & Demand":
         st.plotly_chart(fig7, use_container_width=True)
 
     with col_pie:
-        sw_ct = sw_df.groupby("category")["gross"].sum().reset_index().sort_values("gross", ascending=False)
+        pie_data      = cat_total.sort_values("gross", ascending=False)
+        all_gross_pie = pie_data["gross"].sum()
         fig8 = go.Figure(go.Pie(
-            labels=sw_ct["category"], values=sw_ct["gross"], hole=0.55,
-            marker=dict(colors=[COLORS.get(c,"#888") for c in sw_ct["category"]]),
+            labels=pie_data["category"], values=pie_data["gross"], hole=0.55,
+            marker=dict(colors=[COLORS.get(c,"#888") for c in pie_data["category"]]),
             textinfo="label+percent", textfont=dict(color="#374151", size=11),
             hovertemplate="%{label}  $%{value:,.0f}<extra></extra>",
         ))
-        fig8.add_annotation(text=f"${sw_total_gross:,.0f}", x=0.5, y=0.5,
+        fig8.add_annotation(text=f"${all_gross_pie:,.0f}", x=0.5, y=0.5,
                             showarrow=False, font=dict(color="#111827", size=13))
-        chart_layout(fig8, "Tampa Sales Mix", height=300)
+        chart_layout(fig8, "All-Store Sales Mix", height=300)
         st.plotly_chart(fig8, use_container_width=True)
 
     st.divider()
