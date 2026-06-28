@@ -592,17 +592,47 @@ if view == "Supply & Demand":
 
     col_trend, col_pie = st.columns([3, 2])
     with col_trend:
-        weekly = sw_df.groupby(["week","category"]).agg(gross=("gross","sum")).reset_index()
+        # Tampa: monthly totals from Sweed (Mar–Jun, date-level data)
+        tampa_monthly = (
+            sw_df.groupby("month").agg(gross=("gross", "sum"))
+            .reset_index().assign(store="Tampa")
+        )
+        # Other stores: May aggregate from per-store files (only period available)
+        other_monthly = (
+            store_df.groupby("store").agg(gross=("gross", "sum"))
+            .reset_index()
+        )
+        other_monthly["store"] = other_monthly["store"].str.replace("Eden - ", "", regex=False)
+        other_monthly["month"] = pd.Timestamp("2026-05-01")
+
+        all_monthly = pd.concat([
+            tampa_monthly[["month", "store", "gross"]],
+            other_monthly[["month", "store", "gross"]],
+        ])
+
+        STORE_COLORS = {
+            "Tampa":        "#2d6a4f",
+            "Sarasota":     "#2563eb",
+            "Cocoa Beach":  "#7c3aed",
+            "Orlando":      "#d97706",
+            "Delivery Hub": "#059669",
+        }
         fig7 = go.Figure()
-        for cat in ["Flower","Concentrates","Edibles","Carts","Pre-rolls","Tinctures","Topical"]:
-            d = weekly[weekly["category"] == cat].sort_values("week")
-            fig7.add_trace(go.Scatter(
-                x=d["week"], y=d["gross"], name=cat, mode="lines",
-                line=dict(color=COLORS.get(cat,"#888"), width=2), stackgroup="one",
-                hovertemplate="%{x|%b %d}  $%{y:,.0f}<extra>" + cat + "</extra>",
+        for store in ["Tampa", "Sarasota", "Cocoa Beach", "Orlando", "Delivery Hub"]:
+            d = all_monthly[all_monthly["store"] == store].sort_values("month")
+            if d.empty:
+                continue
+            fig7.add_trace(go.Bar(
+                name=store, x=d["month"], y=d["gross"],
+                marker_color=STORE_COLORS.get(store, "#888"),
+                hovertemplate="%{x|%b %Y}  $%{y:,.0f}<extra>" + store + "</extra>",
             ))
-        fig7.update_layout(yaxis_title="", legend=dict(orientation="h", y=1.1))
-        chart_layout(fig7, "Weekly Sales — Tampa (Sweed)", height=300)
+        fig7.update_layout(
+            barmode="group", yaxis_title="",
+            legend=dict(orientation="h", y=1.1),
+            xaxis=dict(tickformat="%b %Y"),
+        )
+        chart_layout(fig7, "Monthly Gross Sales by Store", height=300)
         st.plotly_chart(fig7, use_container_width=True)
 
     with col_pie:
