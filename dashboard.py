@@ -63,23 +63,26 @@ st.markdown("""
   .story-head { color: #111827; font-size: 1.05rem; font-weight: 700; margin: 0 0 4px 0; }
   .story-sub  { color: #6b7280; font-size: 0.80rem; margin: 0; }
 
-  div[data-testid="stRadio"] { border-bottom: 2px solid #e5e7eb; margin-bottom: 24px; }
+  div[data-testid="stRadio"] { border-bottom: 2px solid #d1d5db; margin-bottom: 24px; }
   div[data-testid="stRadio"] > div { gap: 0 !important; flex-wrap: nowrap; }
   div[data-testid="stRadio"] label {
-    display: inline-flex; align-items: center;
-    padding: 8px 28px 12px 28px;
-    border-bottom: 3px solid transparent;
-    margin-bottom: -2px;
-    cursor: pointer;
-    font-weight: 600; font-size: 0.95rem; color: #374151;
+    display: inline-flex !important; align-items: center !important;
+    padding: 8px 28px 12px 28px !important;
+    border-bottom: 3px solid transparent !important;
+    margin-bottom: -2px !important;
+    cursor: pointer !important;
+    font-weight: 600 !important; font-size: 0.95rem !important;
+    color: #111827 !important;
   }
   div[data-testid="stRadio"] label:has(input:checked) {
-    color: #1a4731;
-    border-bottom: 3px solid #1a4731;
+    color: #1a4731 !important;
+    border-bottom: 3px solid #1a4731 !important;
   }
+  div[data-testid="stRadio"] label p { color: #111827 !important; font-weight: 600 !important; }
+  div[data-testid="stRadio"] label:has(input:checked) p { color: #1a4731 !important; }
   div[data-testid="stRadio"] label > div:first-child {
     width: 0 !important; height: 0 !important; margin: 0 !important;
-    overflow: hidden; border: none !important; background: none !important;
+    overflow: hidden !important; border: none !important; background: none !important;
   }
 
   h1 { color: #111827 !important; }
