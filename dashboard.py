@@ -596,18 +596,25 @@ if view == "Supply & Demand":
         tampa_monthly = (
             sw_df.groupby("month").agg(gross=("gross", "sum"))
             .reset_index().assign(store="Tampa")
+            .sort_values("month")
         )
+        tampa_monthly["month_label"] = tampa_monthly["month"].dt.strftime("%b %Y")
+
         # Other stores: May aggregate from per-store files (only period available)
         other_monthly = (
-            store_df.groupby("store").agg(gross=("gross", "sum"))
-            .reset_index()
+            store_df.groupby("store").agg(gross=("gross", "sum")).reset_index()
         )
         other_monthly["store"] = other_monthly["store"].str.replace("Eden - ", "", regex=False)
-        other_monthly["month"] = pd.Timestamp("2026-05-01")
+        other_monthly["month_label"] = "May 2026"
+
+        # Sorted month labels for x-axis (chronological)
+        month_order = list(tampa_monthly["month_label"].unique())
+        if "May 2026" not in month_order:
+            month_order.append("May 2026")
 
         all_monthly = pd.concat([
-            tampa_monthly[["month", "store", "gross"]],
-            other_monthly[["month", "store", "gross"]],
+            tampa_monthly[["month_label", "store", "gross"]],
+            other_monthly[["month_label", "store", "gross"]],
         ])
 
         STORE_COLORS = {
@@ -619,18 +626,18 @@ if view == "Supply & Demand":
         }
         fig7 = go.Figure()
         for store in ["Tampa", "Sarasota", "Cocoa Beach", "Orlando", "Delivery Hub"]:
-            d = all_monthly[all_monthly["store"] == store].sort_values("month")
+            d = all_monthly[all_monthly["store"] == store]
             if d.empty:
                 continue
             fig7.add_trace(go.Bar(
-                name=store, x=d["month"], y=d["gross"],
+                name=store, x=d["month_label"], y=d["gross"],
                 marker_color=STORE_COLORS.get(store, "#888"),
-                hovertemplate="%{x|%b %Y}  $%{y:,.0f}<extra>" + store + "</extra>",
+                hovertemplate="%{x}  $%{y:,.0f}<extra>" + store + "</extra>",
             ))
         fig7.update_layout(
             barmode="stack", yaxis_title="",
             legend=dict(orientation="h", y=1.1),
-            xaxis=dict(tickformat="%b %Y"),
+            xaxis=dict(categoryorder="array", categoryarray=month_order),
         )
         chart_layout(fig7, "Monthly Gross Sales by Store", height=300)
         st.plotly_chart(fig7, use_container_width=True)
