@@ -216,7 +216,8 @@ def load_data():
 
 @st.cache_data(ttl=300)
 def load_store_sales():
-    """Load per-store Sweed exports: Cocoa Beach, Orlando, Sarasota, Delivery (May 1–Jun 1 2026)."""
+    """Load per-store exports for all 5 locations — Tampa, Sarasota, Cocoa Beach,
+    Orlando, Delivery Hub (May 1–Jun 1 2026 snapshot)."""
     import os
 
     def _cat_from_product(name):
@@ -232,11 +233,13 @@ def load_store_sales():
 
     store_map = {}
     for f in os.listdir("."):
+        if not f.endswith(".xlsx") or not f.startswith("Sales"):
+            continue
         if "COCOA BEACH" in f:                          store_map[f] = "Eden - Cocoa Beach"
         elif "ORLANDO" in f:                            store_map[f] = "Eden - Orlando"
         elif "SARASOTA" in f and "DELIVERY" not in f:  store_map[f] = "Eden - Sarasota"
-        elif "DELIVERY" in f and f.endswith(".xlsx"):   store_map[f] = "Eden - Delivery Hub"
-        # Skip Tampa — sw_df covers it more completely (Mar–Jun vs May only)
+        elif "DELIVERY" in f:                           store_map[f] = "Eden - Delivery Hub"
+        elif "TAMPA" in f:                              store_map[f] = "Eden - Tampa"
 
     records = []
     for fname, store in store_map.items():
@@ -244,6 +247,7 @@ def load_store_sales():
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         # rows[0-2]=metadata, rows[3]=header, rows[4]=TOTAL (skip), rows[5+]=products
+        # cols: Product[0] SKU[1] QTY[2] Sales Receipts[3] Gross Sales[4] Discounts[5]
         for r in rows[5:]:
             if not r[0] or r[0] == "TOTAL":
                 continue
@@ -253,12 +257,13 @@ def load_store_sales():
                 "category": _cat_from_product(r[0]),
                 "qty":      float(r[2] or 0),
                 "gross":    float(r[4] or 0),
+                "net":      float(r[3] or 0),   # Sales Receipts = gross − discounts − rewards
             })
         wb.close()
 
     if records:
         return pd.DataFrame(records)
-    return pd.DataFrame(columns=["store", "product", "category", "qty", "gross"])
+    return pd.DataFrame(columns=["store", "product", "category", "qty", "gross", "net"])
 
 
 inv_df, bio_df, sw_df, al_df = load_data()
@@ -316,10 +321,16 @@ al_df["loc_norm"] = al_df["location"].map(LOC_MAP).fillna(al_df["location"])
 # Exclude Tampa from Alleaves — sw_df covers Tampa more completely (Mar–Jun vs Jan–Apr)
 al_notampa = al_df[al_df["loc_norm"] != "Eden - Tampa"]
 
-ytd_gross = sw_df["gross"].sum() + al_notampa["gross"].sum() + store_df["gross"].sum()
-ytd_net   = sw_df["net"].sum()   + al_notampa["net"].sum()
-ytd_qty   = sw_df["qty"].sum()   + al_notampa["qty"].sum()  + store_df["qty"].sum()
+# Tampa's May 2026 is supplied by its per-store file (store_df). Drop May from the Sweed
+# series so each Tampa month is counted exactly once in blended totals & breakdowns.
+# (Full sw_df is kept for the Weeks-of-Stock velocity, which needs daily data.)
+sw_dedup = sw_df[~((sw_df["date"].dt.year == 2026) & (sw_df["date"].dt.month == 5))].copy()
+
+ytd_gross = sw_dedup["gross"].sum() + al_notampa["gross"].sum() + store_df["gross"].sum()
+ytd_net   = sw_dedup["net"].sum()   + al_notampa["net"].sum()   + store_df["net"].sum()
+ytd_qty   = sw_dedup["qty"].sum()   + al_notampa["qty"].sum()  + store_df["qty"].sum()
 sw_total_gross = sw_df["gross"].sum()
+n_locations = 5  # Tampa, Sarasota, Cocoa Beach, Orlando, Delivery Hub
 
 EXCLUDE_LOCS = {"Quarantine", "Quarantine 1283", "temp hoLDING"}
 fin_df = inv_df[~inv_df["location"].isin(EXCLUDE_LOCS)]
@@ -431,11 +442,23 @@ st.markdown(f"""<div class="story-banner">
 </div>""", unsafe_allow_html=True)
 
 
-view = st.radio("", ["Supply & Demand", "Harvest"], horizontal=True, label_visibility="collapsed")
+view = st.radio("", ["Retail Sales", "Inventory", "Harvest"], horizontal=True, label_visibility="collapsed")
 
-if view == "Supply & Demand":
+if view == "Retail Sales":
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
+    # ── Sales KPIs ────────────────────────────────────────────────────────────
+    # Combined gross by category across all sources (Tampa Sweed + Alleaves + 5 store files)
+    _sw_c    = sw_dedup.groupby("category").agg(gross=("gross", "sum")).reset_index()
+    _al_c    = al_notampa.groupby("cat_norm").agg(gross=("gross", "sum")).reset_index().rename(columns={"cat_norm": "category"})
+    _store_c = store_df.groupby("category").agg(gross=("gross", "sum")).reset_index()
+    cat_all  = pd.concat([_sw_c, _al_c, _store_c]).groupby("category").agg(gross=("gross", "sum")).reset_index()
+    if not cat_all.empty:
+        _top      = cat_all.sort_values("gross", ascending=False).iloc[0]
+        top_cat   = _top["category"]
+        top_share = _top["gross"] / cat_all["gross"].sum() * 100
+    else:
+        top_cat, top_share = "–", 0
+
     k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
         st.markdown(f"""<div class="kpi-hero">
@@ -444,10 +467,10 @@ if view == "Supply & Demand":
           <div class="kpi-sub-hero">Jan 1 – Jun 26, 2026</div>
         </div>""", unsafe_allow_html=True)
     for col, label, value, sub in [
-        (k2, "YTD Net Revenue",  f"${ytd_net:,.0f}",         "After discounts"),
-        (k3, "Units Sold YTD",   f"{int(ytd_qty):,}",        "All locations"),
-        (k4, "On-Hand Units",    f"{total_finished:,}",       "Dispensaries + hub"),
-        (k5, "Bulk Pipeline",    f"{flower_lbs:,.0f} lbs  ·  {mfg_L:.1f} L", "Flower  ·  Concentrate"),
+        (k2, "YTD Net Revenue",  f"${ytd_net:,.0f}",          "After discounts"),
+        (k3, "Units Sold YTD",   f"{int(ytd_qty):,}",         "All locations"),
+        (k4, "Locations",        f"{n_locations}",            "Tampa · Sarasota · Cocoa · Orlando · Delivery"),
+        (k5, "Top Category",     f"{top_cat}",                f"{top_share:.0f}% of gross sales"),
     ]:
         with col:
             st.markdown(f"""<div class="kpi-card">
@@ -456,6 +479,158 @@ if view == "Supply & Demand":
               <div class="kpi-sub">{sub}</div>
             </div>""", unsafe_allow_html=True)
 
+    st.divider()
+
+    # ── Sales ─────────────────────────────────────────────────────────────────
+    st.subheader("YTD Sales")
+
+    col_cat, col_loc = st.columns(2)
+    with col_cat:
+        sw_cat    = sw_dedup.groupby("category").agg(gross=("gross","sum")).reset_index()
+        al_cat    = al_notampa.groupby("cat_norm").agg(gross=("gross","sum")).reset_index()
+        al_cat.rename(columns={"cat_norm": "category"}, inplace=True)
+        store_cat = store_df.groupby("category").agg(gross=("gross","sum")).reset_index()
+        cat_total = pd.concat([sw_cat, al_cat, store_cat]).groupby("category").agg(
+            gross=("gross","sum")).reset_index().sort_values("gross", ascending=True)
+        fig5 = go.Figure(go.Bar(
+            x=cat_total["gross"], y=cat_total["category"], orientation="h",
+            marker_color=[COLORS.get(c, "#2563eb") for c in cat_total["category"]],
+            text=cat_total["gross"].apply(lambda x: f"${x:,.0f}"),
+            textposition="outside", textfont=dict(color="#374151", size=11),
+            cliponaxis=False,
+            hovertemplate="%{y}  $%{x:,.0f}<extra></extra>",
+        ))
+        chart_layout(fig5, "Gross Sales by Category", height=300)
+        fig5.update_layout(
+            xaxis_title="", xaxis=dict(range=[0, cat_total["gross"].max() * 1.25]),
+            yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+            margin=dict(l=10, r=80, t=40, b=10),
+        )
+        st.plotly_chart(fig5, use_container_width=True)
+
+    with col_loc:
+        sw_loc    = sw_dedup.groupby("store").agg(gross=("gross","sum")).reset_index()
+        sw_loc.rename(columns={"store": "location"}, inplace=True)
+        al_loc    = al_notampa.groupby("loc_norm").agg(gross=("gross","sum")).reset_index()
+        al_loc.rename(columns={"loc_norm": "location"}, inplace=True)
+        store_loc = store_df.groupby("store").agg(gross=("gross","sum")).reset_index()
+        store_loc.rename(columns={"store": "location"}, inplace=True)
+        loc_combined = (
+            pd.concat([sw_loc, al_loc, store_loc])
+            .groupby("location").agg(gross=("gross","sum"))
+            .reset_index()
+            .sort_values("gross", ascending=True)
+        )
+        loc_combined["loc_short"] = loc_combined["location"].str.replace("Eden - ", "", regex=False)
+        fig6 = go.Figure(go.Bar(
+            x=loc_combined["gross"], y=loc_combined["loc_short"], orientation="h",
+            marker_color="#2d6a4f",
+            text=loc_combined["gross"].apply(lambda x: f"${x:,.0f}"),
+            textposition="outside", textfont=dict(color="#374151", size=11),
+            cliponaxis=False,
+            hovertemplate="%{y}  $%{x:,.0f}<extra></extra>",
+        ))
+        chart_layout(fig6, "Gross Sales by Location", height=300)
+        fig6.update_layout(
+            xaxis_title="",
+            xaxis=dict(range=[0, loc_combined["gross"].max() * 1.30]),
+            yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+            margin=dict(l=10, r=110, t=40, b=10),
+        )
+        st.plotly_chart(fig6, use_container_width=True)
+
+    col_trend, col_pie = st.columns([3, 2])
+    with col_trend:
+        # Tampa: monthly totals from Sweed, May excluded (dedup) — Mar, Apr, Jun.
+        # Tampa's May arrives below via its per-store file, so it is counted once.
+        tampa_monthly = (
+            sw_dedup.groupby("month").agg(gross=("gross", "sum"))
+            .reset_index().assign(store="Tampa")
+            .sort_values("month")
+        )
+        tampa_monthly["month_label"] = tampa_monthly["month"].dt.strftime("%b %Y")
+
+        # All stores' May 2026 from per-store files (incl. Tampa's May, the only place
+        # it now appears). This is the only period available for the non-Tampa stores.
+        other_monthly = (
+            store_df.groupby("store").agg(gross=("gross", "sum")).reset_index()
+        )
+        other_monthly["store"] = other_monthly["store"].str.replace("Eden - ", "", regex=False)
+        other_monthly["month_label"] = "May 2026"
+
+        # Chronological x-axis ordering across all months present (Mar–Jun 2026)
+        _month_keys = list(tampa_monthly["month"]) + [pd.Timestamp("2026-05-01")]
+        month_order = [pd.Timestamp(m).strftime("%b %Y") for m in sorted(set(_month_keys))]
+
+        all_monthly = pd.concat([
+            tampa_monthly[["month_label", "store", "gross"]],
+            other_monthly[["month_label", "store", "gross"]],
+        ])
+
+        STORE_COLORS = {
+            "Tampa":        "#2d6a4f",
+            "Sarasota":     "#2563eb",
+            "Cocoa Beach":  "#7c3aed",
+            "Orlando":      "#d97706",
+            "Delivery Hub": "#059669",
+        }
+        fig7 = go.Figure()
+        for store in ["Tampa", "Sarasota", "Cocoa Beach", "Orlando", "Delivery Hub"]:
+            d = all_monthly[all_monthly["store"] == store]
+            if d.empty:
+                continue
+            fig7.add_trace(go.Bar(
+                name=store, x=d["month_label"], y=d["gross"],
+                marker_color=STORE_COLORS.get(store, "#888"),
+                hovertemplate="%{x}  $%{y:,.0f}<extra>" + store + "</extra>",
+            ))
+        fig7.update_layout(
+            barmode="stack", yaxis_title="",
+            legend=dict(orientation="h", y=1.1),
+            xaxis=dict(categoryorder="array", categoryarray=month_order),
+        )
+        chart_layout(fig7, "Monthly Gross Sales by Store", height=300)
+        st.plotly_chart(fig7, use_container_width=True)
+
+    with col_pie:
+        pie_data      = cat_total.sort_values("gross", ascending=False)
+        all_gross_pie = pie_data["gross"].sum()
+        fig8 = go.Figure(go.Pie(
+            labels=pie_data["category"], values=pie_data["gross"], hole=0.55,
+            marker=dict(colors=[COLORS.get(c,"#888") for c in pie_data["category"]]),
+            textinfo="label+percent", textfont=dict(color="#374151", size=11),
+            hovertemplate="%{label}  $%{value:,.0f}<extra></extra>",
+        ))
+        fig8.add_annotation(text=f"${all_gross_pie:,.0f}", x=0.5, y=0.5,
+                            showarrow=False, font=dict(color="#111827", size=13))
+        chart_layout(fig8, "All-Store Sales Mix", height=300)
+        st.plotly_chart(fig8, use_container_width=True)
+
+
+if view == "Inventory":
+
+    # ── Inventory KPIs ────────────────────────────────────────────────────────
+    disp_units  = disp_df["qty"].sum()
+    vault_units = vault_df["qty"].sum()
+    ik1, ik2, ik3, ik4, ik5 = st.columns(5)
+    with ik1:
+        st.markdown(f"""<div class="kpi-hero">
+          <div class="kpi-label-hero">On-Hand Units</div>
+          <div class="kpi-value-hero">{total_finished:,}</div>
+          <div class="kpi-sub-hero">Dispensaries + hub</div>
+        </div>""", unsafe_allow_html=True)
+    for col, label, value, sub in [
+        (ik2, "Dispensary Floor", f"{int(disp_units):,}",   "Across 4 stores"),
+        (ik3, "Processing Vault", f"{int(vault_units):,}",  "Finished · pre-distribution"),
+        (ik4, "Bulk Flower",      f"{flower_lbs:,.0f} lbs", "In production pipeline"),
+        (ik5, "Bulk Concentrate", f"{mfg_L:.1f} L",         "In production pipeline"),
+    ]:
+        with col:
+            st.markdown(f"""<div class="kpi-card">
+              <div class="kpi-label">{label}</div>
+              <div class="kpi-value">{value}</div>
+              <div class="kpi-sub">{sub}</div>
+            </div>""", unsafe_allow_html=True)
     st.divider()
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
@@ -529,132 +704,6 @@ if view == "Supply & Demand":
                             showarrow=False, font=dict(color="#111827", size=13))
         chart_layout(fig4, f"Processing Vault  ·  {vault_total:,} units", height=320)
         st.plotly_chart(fig4, use_container_width=True)
-
-    st.divider()
-
-    # ── Sales ─────────────────────────────────────────────────────────────────
-    st.subheader("YTD Sales")
-
-    col_cat, col_loc = st.columns(2)
-    with col_cat:
-        sw_cat    = sw_df.groupby("category").agg(gross=("gross","sum")).reset_index()
-        al_cat    = al_notampa.groupby("cat_norm").agg(gross=("gross","sum")).reset_index()
-        al_cat.rename(columns={"cat_norm": "category"}, inplace=True)
-        store_cat = store_df.groupby("category").agg(gross=("gross","sum")).reset_index()
-        cat_total = pd.concat([sw_cat, al_cat, store_cat]).groupby("category").agg(
-            gross=("gross","sum")).reset_index().sort_values("gross", ascending=True)
-        fig5 = go.Figure(go.Bar(
-            x=cat_total["gross"], y=cat_total["category"], orientation="h",
-            marker_color=[COLORS.get(c, "#2563eb") for c in cat_total["category"]],
-            text=cat_total["gross"].apply(lambda x: f"${x:,.0f}"),
-            textposition="outside", textfont=dict(color="#374151", size=11),
-            cliponaxis=False,
-            hovertemplate="%{y}  $%{x:,.0f}<extra></extra>",
-        ))
-        chart_layout(fig5, "Gross Sales by Category", height=300)
-        fig5.update_layout(
-            xaxis_title="", xaxis=dict(range=[0, cat_total["gross"].max() * 1.25]),
-            yaxis=dict(gridcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=80, t=40, b=10),
-        )
-        st.plotly_chart(fig5, use_container_width=True)
-
-    with col_loc:
-        sw_loc    = sw_df.groupby("store").agg(gross=("gross","sum")).reset_index()
-        sw_loc.rename(columns={"store": "location"}, inplace=True)
-        al_loc    = al_notampa.groupby("loc_norm").agg(gross=("gross","sum")).reset_index()
-        al_loc.rename(columns={"loc_norm": "location"}, inplace=True)
-        store_loc = store_df.groupby("store").agg(gross=("gross","sum")).reset_index()
-        store_loc.rename(columns={"store": "location"}, inplace=True)
-        loc_combined = (
-            pd.concat([sw_loc, al_loc, store_loc])
-            .groupby("location").agg(gross=("gross","sum"))
-            .reset_index()
-            .sort_values("gross", ascending=True)
-        )
-        loc_combined["loc_short"] = loc_combined["location"].str.replace("Eden - ", "", regex=False)
-        fig6 = go.Figure(go.Bar(
-            x=loc_combined["gross"], y=loc_combined["loc_short"], orientation="h",
-            marker_color="#2d6a4f",
-            text=loc_combined["gross"].apply(lambda x: f"${x:,.0f}"),
-            textposition="outside", textfont=dict(color="#374151", size=11),
-            cliponaxis=False,
-            hovertemplate="%{y}  $%{x:,.0f}<extra></extra>",
-        ))
-        chart_layout(fig6, "Gross Sales by Location", height=300)
-        fig6.update_layout(
-            xaxis_title="",
-            xaxis=dict(range=[0, loc_combined["gross"].max() * 1.30]),
-            yaxis=dict(gridcolor="rgba(0,0,0,0)"),
-            margin=dict(l=10, r=110, t=40, b=10),
-        )
-        st.plotly_chart(fig6, use_container_width=True)
-
-    col_trend, col_pie = st.columns([3, 2])
-    with col_trend:
-        # Tampa: monthly totals from Sweed (Mar–Jun, date-level data)
-        tampa_monthly = (
-            sw_df.groupby("month").agg(gross=("gross", "sum"))
-            .reset_index().assign(store="Tampa")
-            .sort_values("month")
-        )
-        tampa_monthly["month_label"] = tampa_monthly["month"].dt.strftime("%b %Y")
-
-        # Other stores: May aggregate from per-store files (only period available)
-        other_monthly = (
-            store_df.groupby("store").agg(gross=("gross", "sum")).reset_index()
-        )
-        other_monthly["store"] = other_monthly["store"].str.replace("Eden - ", "", regex=False)
-        other_monthly["month_label"] = "May 2026"
-
-        # Sorted month labels for x-axis (chronological)
-        month_order = list(tampa_monthly["month_label"].unique())
-        if "May 2026" not in month_order:
-            month_order.append("May 2026")
-
-        all_monthly = pd.concat([
-            tampa_monthly[["month_label", "store", "gross"]],
-            other_monthly[["month_label", "store", "gross"]],
-        ])
-
-        STORE_COLORS = {
-            "Tampa":        "#2d6a4f",
-            "Sarasota":     "#2563eb",
-            "Cocoa Beach":  "#7c3aed",
-            "Orlando":      "#d97706",
-            "Delivery Hub": "#059669",
-        }
-        fig7 = go.Figure()
-        for store in ["Tampa", "Sarasota", "Cocoa Beach", "Orlando", "Delivery Hub"]:
-            d = all_monthly[all_monthly["store"] == store]
-            if d.empty:
-                continue
-            fig7.add_trace(go.Bar(
-                name=store, x=d["month_label"], y=d["gross"],
-                marker_color=STORE_COLORS.get(store, "#888"),
-                hovertemplate="%{x}  $%{y:,.0f}<extra>" + store + "</extra>",
-            ))
-        fig7.update_layout(
-            barmode="stack", yaxis_title="",
-            legend=dict(orientation="h", y=1.1),
-            xaxis=dict(categoryorder="array", categoryarray=month_order),
-        )
-        chart_layout(fig7, "Monthly Gross Sales by Store", height=300)
-        st.plotly_chart(fig7, use_container_width=True)
-
-    with col_pie:
-        pie_data      = cat_total.sort_values("gross", ascending=False)
-        all_gross_pie = pie_data["gross"].sum()
-        fig8 = go.Figure(go.Pie(
-            labels=pie_data["category"], values=pie_data["gross"], hole=0.55,
-            marker=dict(colors=[COLORS.get(c,"#888") for c in pie_data["category"]]),
-            textinfo="label+percent", textfont=dict(color="#374151", size=11),
-            hovertemplate="%{label}  $%{value:,.0f}<extra></extra>",
-        ))
-        fig8.add_annotation(text=f"${all_gross_pie:,.0f}", x=0.5, y=0.5,
-                            showarrow=False, font=dict(color="#111827", size=13))
-        chart_layout(fig8, "All-Store Sales Mix", height=300)
-        st.plotly_chart(fig8, use_container_width=True)
 
     st.divider()
 
