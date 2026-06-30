@@ -111,6 +111,45 @@ st.markdown("""
   }
   .data-table tr:last-child td { border-bottom: none; }
   .data-note { color: #9ca3af; font-size: 0.68rem; margin: 10px 0 0 0; }
+
+  /* ── Filter controls ───────────────────────────────────────────────────── */
+  .filter-bar {
+    color: #1a4731; font-size: 0.72rem; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.09em;
+    display: flex; align-items: center; gap: 8px;
+    margin: 2px 0 10px 2px;
+  }
+  .filter-bar::before {
+    content: ""; display: inline-block; width: 14px; height: 14px;
+    background: #1a4731;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M3 4h18l-7 8v6l-4 2v-8z'/></svg>") center/contain no-repeat;
+            mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M3 4h18l-7 8v6l-4 2v-8z'/></svg>") center/contain no-repeat;
+  }
+  div[data-testid="stMultiSelect"] label p,
+  div[data-testid="stDateInput"]  label p {
+    color: #4b5563 !important; font-size: 0.66rem !important; font-weight: 700 !important;
+    text-transform: uppercase !important; letter-spacing: 0.07em !important;
+  }
+  div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div,
+  div[data-testid="stDateInput"]  div[data-baseweb="input"] {
+    background: #ffffff !important;
+    border: 1px solid #d8dee6 !important;
+    border-radius: 10px !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+    min-height: 42px;
+  }
+  /* cap the pills area height so a long multi-select never balloons the row */
+  div[data-testid="stMultiSelect"] div[data-baseweb="select"] > div:first-child {
+    max-height: 78px; overflow-y: auto;
+  }
+  div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+    background: #e3efe8 !important; border-radius: 6px !important;
+  }
+  div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span { color: #1a4731 !important; }
+  div[data-testid="stMultiSelect"] span[data-baseweb="tag"] svg  { fill:  #1a4731 !important; }
+  div[data-testid="stMultiSelect"] div[data-baseweb="select"] svg,
+  div[data-testid="stDateInput"]  svg { fill: #9ca3af !important; }
+  div[data-testid="stMultiSelect"] input::placeholder { color: #9ca3af !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -474,11 +513,14 @@ if view == "Retail Sales":
         store_df["store"].map(_clean_store),
     )
     _dmin, _dmax = sw_dedup["date"].min().date(), sw_dedup["date"].max().date()
+    st.markdown('<div class="filter-bar">Filters</div>', unsafe_allow_html=True)
     fc1, fc2, fc3 = st.columns([2, 2, 2])
     sel_range  = fc1.date_input("Date range (Tampa daily sales)", (_dmin, _dmax),
                                 min_value=_dmin, max_value=_dmax, key="rs_date")
-    sel_cats   = fc2.multiselect("Category", _cat_opts, default=_cat_opts, key="rs_cat") or _cat_opts
-    sel_stores = fc3.multiselect("Store", _store_opts, default=_store_opts, key="rs_store") or _store_opts
+    sel_cats   = fc2.multiselect("Category", _cat_opts, default=[],
+                                 placeholder="All categories", key="rs_cat") or _cat_opts
+    sel_stores = fc3.multiselect("Store", _store_opts, default=[],
+                                 placeholder="All stores", key="rs_store") or _store_opts
 
     if isinstance(sel_range, (list, tuple)) and len(sel_range) == 2:
         d0, d1 = pd.Timestamp(sel_range[0]), pd.Timestamp(sel_range[1]) + pd.Timedelta(days=1)
@@ -678,10 +720,14 @@ if view == "Inventory":
     _icat    = _options(disp_df["category"], vault_df["category"], bio_df["broad_cat"], store_df["category"])
     _istore  = _options(disp_df["org"].map(DISP_ORGS), store_df["store"].map(_clean_store))
     _istrain = _options(bio_df["strain"])
+    st.markdown('<div class="filter-bar">Filters</div>', unsafe_allow_html=True)
     fi1, fi2, fi3 = st.columns(3)
-    isel_cat    = fi1.multiselect("Category", _icat, default=_icat, key="inv_cat") or _icat
-    isel_store  = fi2.multiselect("Store", _istore, default=_istore, key="inv_store") or _istore
-    isel_strain = fi3.multiselect("Strain (pipeline)", _istrain, default=_istrain, key="inv_strain") or _istrain
+    isel_cat    = fi1.multiselect("Category", _icat, default=[],
+                                  placeholder="All categories", key="inv_cat") or _icat
+    isel_store  = fi2.multiselect("Store", _istore, default=[],
+                                  placeholder="All stores", key="inv_store") or _istore
+    isel_strain = fi3.multiselect("Strain (pipeline)", _istrain, default=[],
+                                  placeholder="All strains", key="inv_strain") or _istrain
 
     disp_df = disp_df[
         disp_df["category"].isin(isel_cat) &
@@ -961,13 +1007,15 @@ if view == "Harvest":
     _hmin = _hd.min().date() if not _hd.empty else None
     _hmax = _hd.max().date() if not _hd.empty else None
     _hstrain = _options(pd.concat([harvested["strain"], active["strain"], upcoming["strain"]]))
+    st.markdown('<div class="filter-bar">Filters</div>', unsafe_allow_html=True)
     hf1, hf2 = st.columns([2, 3])
     if _hmin and _hmax and _hmin < _hmax:
         hsel_range = hf1.date_input("Harvest date range", (_hmin, _hmax),
                                     min_value=_hmin, max_value=_hmax, key="hv_date")
     else:
         hsel_range = None
-    hsel_strain = hf2.multiselect("Strain", _hstrain, default=_hstrain, key="hv_strain") or _hstrain
+    hsel_strain = hf2.multiselect("Strain", _hstrain, default=[],
+                                  placeholder="All strains", key="hv_strain") or _hstrain
 
     if isinstance(hsel_range, (list, tuple)) and len(hsel_range) == 2:
         hd0, hd1 = pd.Timestamp(hsel_range[0]), pd.Timestamp(hsel_range[1]) + pd.Timedelta(days=1)
