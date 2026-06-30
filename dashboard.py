@@ -433,12 +433,20 @@ mfg_L      = pipeline_bio[pipeline_bio["unit"] == "L"]["display_count"].sum()
 # ── Header ───────────────────────────────────────────────────────────────────
 st.title("Eden Cannabis")
 
-# Narrative banner
-sw_cat_top = sw_df.groupby("category")["gross"].sum().idxmax() if not sw_df.empty else "Flower"
-sw_cat_pct = (sw_df.groupby("category")["gross"].sum().max() / sw_df["gross"].sum() * 100) if not sw_df.empty else 0
+# Narrative banner — all-store top category (Tampa Sweed + Alleaves + per-store files)
+_bcat = pd.concat([
+    sw_dedup.groupby("category")["gross"].sum(),
+    al_notampa.groupby("cat_norm")["gross"].sum(),
+    store_df.groupby("category")["gross"].sum(),
+]).groupby(level=0).sum()
+if not _bcat.empty and _bcat.sum() > 0:
+    top_cat_all = _bcat.idxmax()
+    top_pct_all = _bcat.max() / _bcat.sum() * 100
+else:
+    top_cat_all, top_pct_all = "Flower", 0
 st.markdown(f"""<div class="story-banner">
   <p class="story-head">YTD: ${ytd_gross:,.0f} gross revenue &nbsp;·&nbsp; {int(ytd_qty):,} units sold across all locations</p>
-  <p class="story-sub">{sw_cat_top} leads Tampa sales at {sw_cat_pct:.0f}% of revenue &nbsp;·&nbsp; {total_finished:,} finished units on-hand &nbsp;·&nbsp; {flower_lbs:,.0f} lbs flower + {mfg_L:.1f} L concentrate in production pipeline</p>
+  <p class="story-sub">{top_cat_all} leads all-store sales at {top_pct_all:.0f}% of revenue &nbsp;·&nbsp; {total_finished:,} finished units on-hand &nbsp;·&nbsp; {flower_lbs:,.0f} lbs flower + {mfg_L:.1f} L concentrate in production pipeline</p>
 </div>""", unsafe_allow_html=True)
 
 
@@ -712,11 +720,19 @@ if view == "Inventory":
 
     floor_df = disp_df.groupby("category")["qty"].sum().reset_index()
     floor_df.columns = ["category", "on_hand"]
-    cutoff = sw_df["date"].max() - pd.Timedelta(weeks=4)
-    velocity_4w = sw_df[sw_df["date"] >= cutoff].groupby("category")["qty"].sum().reset_index()
-    velocity_4w.columns = ["category", "sold_4w"]
-    velocity_4w["weekly_velocity"] = velocity_4w["sold_4w"] / 4
-    svd = floor_df.merge(velocity_4w, on="category", how="outer").fillna(0)
+
+    # All-store weekly velocity by category:
+    #   Tampa  → true last-4-week run-rate from daily Sweed data
+    #   Others → May per-store snapshot (only period available) ÷ weeks per month
+    WEEKS_PER_MONTH = 4.345
+    cutoff   = sw_df["date"].max() - pd.Timedelta(weeks=4)
+    tampa_v  = sw_df[sw_df["date"] >= cutoff].groupby("category")["qty"].sum() / 4
+    other_v  = (
+        store_df[store_df["store"] != "Eden - Tampa"]
+        .groupby("category")["qty"].sum() / WEEKS_PER_MONTH
+    )
+    velocity = tampa_v.add(other_v, fill_value=0).rename("weekly_velocity").reset_index()
+    svd = floor_df.merge(velocity, on="category", how="outer").fillna(0)
     svd["weeks_of_stock"] = svd.apply(
         lambda r: round(r["on_hand"] / r["weekly_velocity"], 1) if r["weekly_velocity"] > 0 else None,
         axis=1)
@@ -730,7 +746,7 @@ if view == "Inventory":
             hovertemplate="%{x}  %{y:,} units<extra></extra>",
         ), secondary_y=False)
         fig9.add_trace(go.Scatter(
-            name="Weekly Velocity (Tampa)", x=svd["category"], y=svd["weekly_velocity"],
+            name="Weekly Velocity (all stores)", x=svd["category"], y=svd["weekly_velocity"],
             mode="markers+lines", marker=dict(size=9, color="#d97706", symbol="diamond"),
             line=dict(color="#d97706", width=2, dash="dot"),
             hovertemplate="%{x}  ~%{y:.0f}/wk<extra></extra>",
@@ -764,7 +780,82 @@ if view == "Inventory":
             <thead><tr><th>Category</th><th>On-Hand</th><th>Wkly Vel.</th><th>Wks Stock</th></tr></thead>
             <tbody>{rows_html}</tbody>
           </table>
-          <p class="data-note">Tampa velocity · last 4 wks &nbsp;·&nbsp; +{vault_df['qty'].sum():,} units in processing vault</p>
+          <p class="data-note">All-store weekly velocity &nbsp;·&nbsp; +{vault_df['qty'].sum():,} units in processing vault</p>
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── Weeks on Hand by Location ─────────────────────────────────────────────
+    st.subheader("Weeks on Hand by Location")
+
+    # Finished on-hand units per dispensary (Tampa, Sarasota, Cocoa Beach, Orlando)
+    loc_oh = disp_df.copy()
+    loc_oh["store"] = loc_oh["org"].map(DISP_ORGS)
+    loc_oh = loc_oh.groupby("store")["qty"].sum().reset_index()
+    loc_oh.columns = ["store", "on_hand"]
+
+    # Weekly sales velocity per location:
+    #   Tampa  → true last-4-week run-rate from daily Sweed data.
+    #   Others → May per-store snapshot (only period available) ÷ weeks per month.
+    WEEKS_PER_MONTH = 4.345
+    tampa_vel = (
+        sw_df[sw_df["date"] >= sw_df["date"].max() - pd.Timedelta(weeks=4)]["qty"].sum() / 4
+    )
+    store_vel = store_df.groupby("store")["qty"].sum().reset_index()
+    store_vel["store"] = store_vel["store"].str.replace("Eden - ", "", regex=False)
+    vel_map = {s: q / WEEKS_PER_MONTH for s, q in zip(store_vel["store"], store_vel["qty"])}
+    vel_map["Tampa"] = tampa_vel  # daily-derived run-rate beats the 1-month snapshot
+
+    woh = loc_oh.copy()
+    woh["weekly_velocity"] = woh["store"].map(vel_map).fillna(0)
+    woh["weeks_on_hand"] = woh.apply(
+        lambda r: round(r["on_hand"] / r["weekly_velocity"], 1) if r["weekly_velocity"] > 0 else None,
+        axis=1)
+    woh = woh.sort_values("weeks_on_hand", ascending=True, na_position="last")
+
+    def _woh_color(w):
+        if w is None or pd.isna(w): return "#9ca3af"  # no velocity → gray
+        if w < 2:  return "#dc2626"   # critical  (<2 wks)
+        if w < 4:  return "#d97706"   # watch     (2–4 wks)
+        if w <= 8: return "#16a34a"   # healthy   (4–8 wks)
+        return "#2563eb"              # overstock (>8 wks)
+
+    col_woh, col_woh_tbl = st.columns([3, 2])
+    with col_woh:
+        plot = woh[woh["weeks_on_hand"].notna()]
+        fig10 = go.Figure(go.Bar(
+            x=plot["weeks_on_hand"], y=plot["store"], orientation="h",
+            marker_color=[_woh_color(w) for w in plot["weeks_on_hand"]],
+            text=[f"{w:.1f} wks" for w in plot["weeks_on_hand"]],
+            textposition="outside", cliponaxis=False,
+            hovertemplate="%{y}<br>%{x:.1f} weeks on hand<extra></extra>",
+        ))
+        fig10.update_layout(
+            paper_bgcolor=CHART_BG, plot_bgcolor=CHART_BG, font=dict(color=TEXT_COLOR),
+            height=300, margin=dict(l=10, r=50, t=40, b=10),
+            title=dict(text="Finished Inventory Coverage (weeks at current run-rate)",
+                       font=dict(color="#111827", size=13), x=0.01),
+            xaxis=dict(title="Weeks on hand", gridcolor=GRID_COLOR, tickfont=dict(color=TEXT_COLOR)),
+            yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT_COLOR)),
+        )
+        st.plotly_chart(fig10, use_container_width=True)
+
+    with col_woh_tbl:
+        wd = woh.copy()
+        wd["on_hand_fmt"] = wd["on_hand"].apply(lambda x: f"{int(x):,}")
+        wd["vel_fmt"]     = wd["weekly_velocity"].apply(lambda x: f"~{x:.0f}/wk" if pd.notna(x) and x > 0 else "–")
+        wd["woh_fmt"]     = wd["weeks_on_hand"].apply(lambda x: f"{x:.1f}" if pd.notna(x) else "–")
+        rows_html = "".join(
+            f"<tr><td>{r['store']}</td><td>{r['on_hand_fmt']}</td>"
+            f"<td>{r['vel_fmt']}</td><td>{r['woh_fmt']}</td></tr>"
+            for _, r in wd.iterrows()
+        )
+        st.markdown(f"""<div class="data-card">
+          <table class="data-table">
+            <thead><tr><th>Location</th><th>On-Hand</th><th>Wkly Vel.</th><th>Wks on Hand</th></tr></thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+          <p class="data-note">All-store weekly sales velocity</p>
         </div>""", unsafe_allow_html=True)
 
 
