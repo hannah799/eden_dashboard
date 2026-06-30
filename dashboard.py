@@ -452,7 +452,62 @@ st.markdown(f"""<div class="story-banner">
 
 view = st.radio("", ["Retail Sales", "Inventory", "Harvest"], horizontal=True, label_visibility="collapsed")
 
+
+# ── Filter helpers ─────────────────────────────────────────────────────────────
+def _clean_store(s):
+    return str(s).replace("Eden - ", "")
+
+def _options(*series):
+    vals = set()
+    for s in series:
+        vals |= {v for v in pd.Series(list(s)).dropna().unique()}
+    return sorted(vals, key=str)
+
+
 if view == "Retail Sales":
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    _cat_opts   = _options(sw_dedup["category"], al_notampa["cat_norm"], store_df["category"])
+    _store_opts = _options(
+        sw_dedup["store"].map(_clean_store),
+        al_notampa["loc_norm"].map(_clean_store),
+        store_df["store"].map(_clean_store),
+    )
+    _dmin, _dmax = sw_dedup["date"].min().date(), sw_dedup["date"].max().date()
+    fc1, fc2, fc3 = st.columns([2, 2, 2])
+    sel_range  = fc1.date_input("Date range (Tampa daily sales)", (_dmin, _dmax),
+                                min_value=_dmin, max_value=_dmax, key="rs_date")
+    sel_cats   = fc2.multiselect("Category", _cat_opts, default=_cat_opts, key="rs_cat") or _cat_opts
+    sel_stores = fc3.multiselect("Store", _store_opts, default=_store_opts, key="rs_store") or _store_opts
+
+    if isinstance(sel_range, (list, tuple)) and len(sel_range) == 2:
+        d0, d1 = pd.Timestamp(sel_range[0]), pd.Timestamp(sel_range[1]) + pd.Timedelta(days=1)
+    else:
+        d0, d1 = pd.Timestamp(_dmin), pd.Timestamp(_dmax) + pd.Timedelta(days=1)
+
+    # Date filter applies only to dated Tampa sales; Alleaves & per-store files are
+    # single snapshots with no per-row date, so only category/store filter them.
+    sw_dedup = sw_dedup[
+        (sw_dedup["date"] >= d0) & (sw_dedup["date"] < d1) &
+        sw_dedup["category"].isin(sel_cats) &
+        sw_dedup["store"].map(_clean_store).isin(sel_stores)
+    ].copy()
+    al_notampa = al_notampa[
+        al_notampa["cat_norm"].isin(sel_cats) &
+        al_notampa["loc_norm"].map(_clean_store).isin(sel_stores)
+    ].copy()
+    store_df = store_df[
+        store_df["category"].isin(sel_cats) &
+        store_df["store"].map(_clean_store).isin(sel_stores)
+    ].copy()
+
+    # Recompute headline KPIs from the filtered frames
+    ytd_gross   = sw_dedup["gross"].sum() + al_notampa["gross"].sum() + store_df["gross"].sum()
+    ytd_net     = sw_dedup["net"].sum()   + al_notampa["net"].sum()   + store_df["net"].sum()
+    ytd_qty     = sw_dedup["qty"].sum()   + al_notampa["qty"].sum()   + store_df["qty"].sum()
+    n_locations = len(sel_stores)
+    _date_sub   = f"{d0:%b %-d} – {(d1 - pd.Timedelta(days=1)):%b %-d, %Y}"
+    _loc_sub    = ", ".join(sel_stores) if len(sel_stores) <= 3 else f"{n_locations} locations"
 
     # ── Sales KPIs ────────────────────────────────────────────────────────────
     # Combined gross by category across all sources (Tampa Sweed + Alleaves + 5 store files)
@@ -472,12 +527,12 @@ if view == "Retail Sales":
         st.markdown(f"""<div class="kpi-hero">
           <div class="kpi-label-hero">YTD Gross Revenue</div>
           <div class="kpi-value-hero">${ytd_gross:,.0f}</div>
-          <div class="kpi-sub-hero">Jan 1 – Jun 26, 2026</div>
+          <div class="kpi-sub-hero">{_date_sub}</div>
         </div>""", unsafe_allow_html=True)
     for col, label, value, sub in [
-        (k2, "YTD Net Revenue",  f"${ytd_net:,.0f}",          "After discounts"),
-        (k3, "Units Sold YTD",   f"{int(ytd_qty):,}",         "All locations"),
-        (k4, "Locations",        f"{n_locations}",            "Tampa · Sarasota · Cocoa · Orlando · Delivery"),
+        (k2, "Net Revenue",      f"${ytd_net:,.0f}",          "After discounts"),
+        (k3, "Units Sold",       f"{int(ytd_qty):,}",         "Selected filters"),
+        (k4, "Locations",        f"{n_locations}",            _loc_sub),
         (k5, "Top Category",     f"{top_cat}",                f"{top_share:.0f}% of gross sales"),
     ]:
         with col:
@@ -617,6 +672,42 @@ if view == "Retail Sales":
 
 if view == "Inventory":
 
+    # ── Filters ───────────────────────────────────────────────────────────────
+    # Strain exists only on the Biotrack pipeline (finished goods carry no strain),
+    # so the Strain filter narrows the Production Pipeline charts only.
+    _icat    = _options(disp_df["category"], vault_df["category"], bio_df["broad_cat"], store_df["category"])
+    _istore  = _options(disp_df["org"].map(DISP_ORGS), store_df["store"].map(_clean_store))
+    _istrain = _options(bio_df["strain"])
+    fi1, fi2, fi3 = st.columns(3)
+    isel_cat    = fi1.multiselect("Category", _icat, default=_icat, key="inv_cat") or _icat
+    isel_store  = fi2.multiselect("Store", _istore, default=_istore, key="inv_store") or _istore
+    isel_strain = fi3.multiselect("Strain (pipeline)", _istrain, default=_istrain, key="inv_strain") or _istrain
+
+    disp_df = disp_df[
+        disp_df["category"].isin(isel_cat) &
+        disp_df["org"].map(DISP_ORGS).isin(isel_store)
+    ].copy()
+    vault_df = vault_df[vault_df["category"].isin(isel_cat)].copy()       # central vault: no store dim
+    store_df = store_df[
+        store_df["category"].isin(isel_cat) &
+        store_df["store"].map(_clean_store).isin(isel_store)
+    ].copy()
+    sw_df = sw_df[
+        sw_df["category"].isin(isel_cat) &
+        sw_df["store"].map(_clean_store).isin(isel_store)
+    ].copy()
+    bio_df = bio_df[
+        bio_df["broad_cat"].isin(isel_cat) &
+        bio_df["strain"].isin(isel_strain)
+    ].copy()
+
+    # Recompute KPI scalars from the filtered frames
+    total_finished = int(disp_df["qty"].sum() + vault_df["qty"].sum())
+    _pb = bio_df[bio_df["stage"].notna() & ~bio_df["stage"].str.contains("Approved|Sample", na=False)]
+    flower_lbs = _pb[_pb["unit"] == "lbs"]["display_count"].sum()
+    mfg_L      = _pb[_pb["unit"] == "L"]["display_count"].sum()
+    _inv_store_sub = ", ".join(isel_store) if len(isel_store) <= 3 else f"{len(isel_store)} stores"
+
     # ── Inventory KPIs ────────────────────────────────────────────────────────
     disp_units  = disp_df["qty"].sum()
     vault_units = vault_df["qty"].sum()
@@ -628,7 +719,7 @@ if view == "Inventory":
           <div class="kpi-sub-hero">Dispensaries + hub</div>
         </div>""", unsafe_allow_html=True)
     for col, label, value, sub in [
-        (ik2, "Dispensary Floor", f"{int(disp_units):,}",   "Across 4 stores"),
+        (ik2, "Dispensary Floor", f"{int(disp_units):,}",   _inv_store_sub),
         (ik3, "Processing Vault", f"{int(vault_units):,}",  "Finished · pre-distribution"),
         (ik4, "Bulk Flower",      f"{flower_lbs:,.0f} lbs", "In production pipeline"),
         (ik5, "Bulk Concentrate", f"{mfg_L:.1f} L",         "In production pipeline"),
@@ -861,10 +952,39 @@ if view == "Inventory":
 
 if view == "Harvest":
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
     if _harvest_error:
         st.error(f"Could not load harvest data: {_harvest_error}")
 
+    # ── Filters ───────────────────────────────────────────────────────────────
+    # Harvest data carries strain + harvest date (no category / store dimension).
+    _hd = harvested["harvest_date"].dropna()
+    _hmin = _hd.min().date() if not _hd.empty else None
+    _hmax = _hd.max().date() if not _hd.empty else None
+    _hstrain = _options(pd.concat([harvested["strain"], active["strain"], upcoming["strain"]]))
+    hf1, hf2 = st.columns([2, 3])
+    if _hmin and _hmax and _hmin < _hmax:
+        hsel_range = hf1.date_input("Harvest date range", (_hmin, _hmax),
+                                    min_value=_hmin, max_value=_hmax, key="hv_date")
+    else:
+        hsel_range = None
+    hsel_strain = hf2.multiselect("Strain", _hstrain, default=_hstrain, key="hv_strain") or _hstrain
+
+    if isinstance(hsel_range, (list, tuple)) and len(hsel_range) == 2:
+        hd0, hd1 = pd.Timestamp(hsel_range[0]), pd.Timestamp(hsel_range[1]) + pd.Timedelta(days=1)
+    else:
+        hd0, hd1 = None, None
+
+    # Strain filter narrows every harvest table; the date filter narrows actual
+    # harvests (active/upcoming hold planned/future dates, so they stay strain-only).
+    harvested = harvested[harvested["strain"].isin(hsel_strain)].copy()
+    if hd0 is not None:
+        harvested = harvested[
+            (harvested["harvest_date"] >= hd0) & (harvested["harvest_date"] < hd1)
+        ].copy()
+    active   = active[active["strain"].isin(hsel_strain)].copy()
+    upcoming = upcoming[upcoming["strain"].isin(hsel_strain)].copy()
+
+    # ── KPIs ──────────────────────────────────────────────────────────────────
     total_cycles  = len(harvested)
     total_dry_lbs = harvested["dry_lbs"].sum()
     total_ff_lbs  = harvested["ff_lbs"].sum()
