@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from collections import defaultdict
 import openpyxl
+import os, csv
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -340,6 +341,169 @@ def load_harvest():
             "grade":            r[27],
         })
     return pd.DataFrame(h_records)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HEADSET ANALYTICS (headset_reports_july_19/) — weekly sales, top products,
+# days-supply, dead stock, purchase-method (delivery vs in-store), demographics.
+# ══════════════════════════════════════════════════════════════════════════════
+HEADSET_DIR = "headset_reports_july_19"
+
+def _hs_money(x):
+    if x is None:
+        return 0.0
+    if isinstance(x, (int, float)):
+        return float(x)
+    s = str(x).strip().replace("$", "").replace(",", "").replace("%", "")
+    if s in ("", "-", "‎"):
+        return 0.0
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+def _hs_clean_store(s):
+    return str(s).replace("Eden FL - ", "").replace("Eden - ", "").strip()
+
+@st.cache_data(ttl=300)
+def load_headset():
+    def _rows(fname):
+        wb = openpyxl.load_workbook(os.path.join(HEADSET_DIR, fname),
+                                    read_only=True, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        wb.close()
+        return rows
+
+    def _read_csv(fname):
+        with open(os.path.join(HEADSET_DIR, fname), newline="", encoding="utf-8-sig") as f:
+            return list(csv.reader(f))
+
+    out = {}
+
+    # 1. Weekly revenue by store (Mar–Jul 2026)
+    rows = _rows("Sales from Last 26 complete Weeks.xlsx")
+    stores = [_hs_clean_store(c) for c in rows[0][1:5]]
+    recs = []
+    for r in rows[2:]:
+        if not r[0]:
+            continue
+        wk = pd.to_datetime(r[0])
+        for i, st_name in enumerate(stores):
+            v = r[1 + i]
+            if v is not None:
+                recs.append({"week": wk, "store": st_name, "gross": _hs_money(v)})
+    out["weekly"] = pd.DataFrame(recs)
+
+    # 2. Top products (with gross margin)
+    rows = _rows("Top Products.xlsx")
+    recs = []
+    for r in rows[1:]:
+        if not r[1]:
+            continue
+        recs.append({
+            "product": r[1], "category": r[2], "brand": r[4],
+            "gross": _hs_money(r[5]), "units": _hs_money(r[6]),
+            "gm_pct": (float(r[8]) * 100 if r[8] is not None else None),
+            "avg_price": _hs_money(r[9]),
+        })
+    out["top_products"] = pd.DataFrame(recs)
+
+    # 3. Days of supply by category
+    rows = _rows("Days Supply.xlsx")
+    recs = []
+    for r in rows[1:]:
+        if not r[0]:
+            continue
+        recs.append({"category": r[0], "on_hand": _hs_money(r[1]),
+                     "per_day": _hs_money(r[2]), "days_remaining": _hs_money(r[3])})
+    out["days_supply"] = pd.DataFrame(recs)
+
+    # 4. Dead stock — SKUs in stock with no sales
+    rows = _rows("Products In-Stock with No Sales.xlsx")
+    recs = []
+    for r in rows[1:]:
+        if not r[1]:
+            continue
+        recs.append({"category": r[1], "skus": int(_hs_money(r[2]))})
+    out["dead_stock"] = pd.DataFrame(recs)
+
+    # 5. Product list → reorder watchlist
+    rows = _rows("Product List (1).xlsx")
+    recs = []
+    for r in rows[1:]:
+        if not r[2]:
+            continue
+        recs.append({
+            "store": _hs_clean_store(r[1]), "product": r[2], "category": r[5],
+            "on_hand": _hs_money(r[7]), "sold": _hs_money(r[9]),
+            "days_remaining": (None if r[10] is None else _hs_money(r[10])),
+            "per_day": (None if r[11] is None else _hs_money(r[11])),
+            "suggested_order": _hs_money(r[18]),
+        })
+    out["product_list"] = pd.DataFrame(recs)
+
+    # 6. Purchase-method summary (delivery vs in-store KPIs)
+    c = _read_csv("pm_summary.csv")
+    recs = []
+    for r in c[1:]:
+        if len(r) < 6 or not r[1]:
+            continue
+        recs.append({"flag": r[1], "gross": _hs_money(r[2]), "avg_basket": _hs_money(r[3]),
+                     "units_per_basket": _hs_money(r[4]), "discount_pct": _hs_money(r[5])})
+    out["pm_summary"] = pd.DataFrame(recs)
+
+    # 7. Purchase-method weekly revenue
+    c = _read_csv("pm_sales_performance.csv")
+    recs = []
+    for r in c[2:]:
+        if not r or not r[0]:
+            continue
+        recs.append({"week": pd.to_datetime(r[0]),
+                     "Delivery": _hs_money(r[1]), "In-Store": _hs_money(r[2])})
+    out["pm_weekly"] = pd.DataFrame(recs)
+
+    # 8. Demographics — revenue by age group × gender (summed over delivery flag)
+    c = _read_csv("pm_demographics.csv")
+    recs = []
+    for r in c[1:]:
+        if len(r) < 4 or not r[0]:
+            continue
+        recs.append({"age": r[0], "gender": r[1], "gross": _hs_money(r[3])})
+    demo = pd.DataFrame(recs)
+    if not demo.empty:
+        demo = demo.groupby(["age", "gender"], as_index=False)["gross"].sum()
+    out["demographics"] = demo
+
+    # 9. Sales by weekday × hour (summed over delivery flag)
+    c = _read_csv("pm_weekday_hour.csv")
+    day_of_col = {i: c[0][i] for i in range(2, len(c[0]))}
+    recs = []
+    for r in c[3:]:
+        if len(r) < 3 or not r[1]:
+            continue
+        try:
+            hour = int(r[1])
+        except ValueError:
+            continue
+        for i in range(2, len(r)):
+            day = day_of_col.get(i)
+            if not day:
+                continue
+            recs.append({"day": day, "hour": hour, "gross": _hs_money(r[i])})
+    wh = pd.DataFrame(recs)
+    if not wh.empty:
+        wh = wh.groupby(["day", "hour"], as_index=False)["gross"].sum()
+    out["weekday_hour"] = wh
+
+    return out
+
+_headset_error = None
+try:
+    HS = load_headset()
+except Exception as e:
+    _headset_error = str(e)
+    HS = {}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -711,6 +875,149 @@ if view == "Retail Sales":
         chart_layout(fig8, "All-Store Sales Mix", height=300)
         st.plotly_chart(fig8, use_container_width=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # HEADSET ANALYTICS — weekly trend, delivery split, day/hour, demographics,
+    # top products.  (Source: headset_reports_july_19, refreshed Jul 19 2026.)
+    # ══════════════════════════════════════════════════════════════════════════
+    if _headset_error:
+        st.warning(f"Headset analytics unavailable: {_headset_error}")
+    elif HS:
+        st.divider()
+        st.subheader("Headset Analytics")
+        st.caption("Unified all-store reporting from Headset · through Jul 6, 2026")
+
+        STORE_COLORS_HS = {
+            "Tampa": "#2d6a4f", "Sarasota": "#2563eb",
+            "Cocoa Beach": "#7c3aed", "Orlando": "#d97706",
+        }
+
+        # ── Weekly revenue trend by store ──────────────────────────────────────
+        wk = HS["weekly"]
+        if not wk.empty:
+            fig_wk = go.Figure()
+            for store in ["Tampa", "Sarasota", "Cocoa Beach", "Orlando"]:
+                d = wk[wk["store"] == store].sort_values("week")
+                if d.empty:
+                    continue
+                fig_wk.add_trace(go.Scatter(
+                    name=store, x=d["week"], y=d["gross"], mode="lines+markers",
+                    line=dict(color=STORE_COLORS_HS.get(store, "#888"), width=2.5),
+                    marker=dict(size=5),
+                    hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>" + store + "</extra>",
+                ))
+            fig_wk.update_layout(legend=dict(orientation="h", y=1.12), yaxis_title="")
+            chart_layout(fig_wk, "Weekly Gross Revenue by Store", height=340)
+            st.plotly_chart(fig_wk, use_container_width=True)
+
+        # ── In-store vs Delivery ───────────────────────────────────────────────
+        pm = HS["pm_summary"]
+        if not pm.empty:
+            pm_map = {r["flag"]: r for _, r in pm.iterrows()}
+            deliv = pm_map.get("Delivery", {})
+            instore = pm_map.get("Not Delivery", {})
+            d1, d2, d3, d4 = st.columns(4)
+            for col, label, value, sub in [
+                (d1, "In-Store Revenue",  f"${instore.get('gross',0):,.0f}",
+                     f"${instore.get('avg_basket',0):,.0f} avg basket · {instore.get('units_per_basket',0):.1f} units"),
+                (d2, "Delivery Revenue",  f"${deliv.get('gross',0):,.0f}",
+                     f"${deliv.get('avg_basket',0):,.0f} avg basket · {deliv.get('units_per_basket',0):.1f} units"),
+                (d3, "Delivery Basket vs In-Store",
+                     f"{(deliv.get('avg_basket',0)/instore.get('avg_basket',1)):.1f}×" if instore.get('avg_basket',0) else "–",
+                     "Larger delivery orders"),
+                (d4, "Discount Rate",
+                     f"{instore.get('discount_pct',0):.0f}% / {deliv.get('discount_pct',0):.0f}%",
+                     "In-store / delivery"),
+            ]:
+                with col:
+                    st.markdown(f"""<div class="kpi-card">
+                      <div class="kpi-label">{label}</div>
+                      <div class="kpi-value" style="font-size:1.4rem;">{value}</div>
+                      <div class="kpi-sub">{sub}</div>
+                    </div>""", unsafe_allow_html=True)
+            st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+
+        col_pm, col_demo = st.columns(2)
+        with col_pm:
+            pmw = HS["pm_weekly"]
+            if not pmw.empty:
+                fig_pm = go.Figure()
+                fig_pm.add_trace(go.Bar(
+                    name="In-Store", x=pmw["week"], y=pmw["In-Store"], marker_color="#1a4731",
+                    hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>In-Store</extra>"))
+                fig_pm.add_trace(go.Bar(
+                    name="Delivery", x=pmw["week"], y=pmw["Delivery"], marker_color="#059669",
+                    hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>Delivery</extra>"))
+                fig_pm.update_layout(barmode="stack", legend=dict(orientation="h", y=1.15),
+                                     yaxis_title="")
+                chart_layout(fig_pm, "Weekly Revenue — In-Store vs Delivery", height=320)
+                st.plotly_chart(fig_pm, use_container_width=True)
+
+        with col_demo:
+            demo = HS["demographics"]
+            if not demo.empty:
+                age_order = ["25 & under", "26-35", "36-45", "46-55", "56-65", "66 & up"]
+                demo = demo[demo["age"].isin(age_order)]
+                fig_dm = go.Figure()
+                for gender, color in [("M", "#2563eb"), ("F", "#db2777")]:
+                    d = demo[demo["gender"] == gender].set_index("age").reindex(age_order).reset_index()
+                    fig_dm.add_trace(go.Bar(
+                        name={"M": "Male", "F": "Female"}[gender],
+                        x=d["age"], y=d["gross"].fillna(0), marker_color=color,
+                        hovertemplate="%{x}  $%{y:,.0f}<extra>" + gender + "</extra>"))
+                fig_dm.update_layout(barmode="stack", legend=dict(orientation="h", y=1.15),
+                                     yaxis_title="")
+                chart_layout(fig_dm, "Revenue by Age Group & Gender", height=320)
+                st.plotly_chart(fig_dm, use_container_width=True)
+
+        # ── Sales by weekday × hour heatmap ────────────────────────────────────
+        wh = HS["weekday_hour"]
+        if not wh.empty:
+            day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            days = [d for d in day_order if d in wh["day"].unique()]
+            hours = sorted(wh["hour"].unique())
+            grid = wh.pivot(index="day", columns="hour", values="gross").reindex(days)
+            grid = grid.reindex(columns=hours)
+            fig_hm = go.Figure(go.Heatmap(
+                z=grid.values, x=[f"{h}:00" for h in hours], y=days,
+                colorscale=[[0, "#f0f6f0"], [0.5, "#74c69d"], [1, "#1a4731"]],
+                hovertemplate="%{y} %{x}  $%{z:,.0f}<extra></extra>",
+                colorbar=dict(title="", thickness=10),
+            ))
+            chart_layout(fig_hm, "Sales by Day of Week & Hour", height=300)
+            fig_hm.update_layout(yaxis=dict(autorange="reversed"))
+            st.plotly_chart(fig_hm, use_container_width=True)
+
+        # ── Top products table ─────────────────────────────────────────────────
+        tp = HS["top_products"]
+        if not tp.empty:
+            st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+            top15 = tp.sort_values("gross", ascending=False).head(15)
+            rows_html = ""
+            for _, r in top15.iterrows():
+                gm = f"{r['gm_pct']:.0f}%" if pd.notna(r["gm_pct"]) else "–"
+                cat_color = COLORS.get(r["category"], "#6b7280")
+                rows_html += (
+                    f"<tr><td>{r['product']}</td>"
+                    f"<td><span style='color:{cat_color};font-weight:600;'>{r['category']}</span></td>"
+                    f"<td style='text-align:right;'>${r['gross']:,.0f}</td>"
+                    f"<td style='text-align:right;'>{int(r['units']):,}</td>"
+                    f"<td style='text-align:right;'>${r['avg_price']:,.2f}</td>"
+                    f"<td style='text-align:right;'>{gm}</td></tr>"
+                )
+            st.markdown(f"""<div class="data-card" style="height:auto;">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Product</th><th>Category</th>
+                  <th style="text-align:right;">Revenue</th>
+                  <th style="text-align:right;">Units</th>
+                  <th style="text-align:right;">Avg Price</th>
+                  <th style="text-align:right;">Margin</th>
+                </tr></thead>
+                <tbody>{rows_html}</tbody>
+              </table>
+              <p class="data-note">Top 15 products by gross revenue · Headset, all stores</p>
+            </div>""", unsafe_allow_html=True)
+
 
 if view == "Inventory":
 
@@ -994,6 +1301,97 @@ if view == "Inventory":
           </table>
           <p class="data-note">All-store weekly sales velocity</p>
         </div>""", unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # HEADSET SUPPLY ANALYTICS — days-of-supply, dead stock, reorder watchlist.
+    # (Source: headset_reports_july_19, refreshed Jul 19 2026.)
+    # ══════════════════════════════════════════════════════════════════════════
+    if _headset_error:
+        st.warning(f"Headset analytics unavailable: {_headset_error}")
+    elif HS:
+        st.divider()
+        st.subheader("Headset Supply Analytics")
+        st.caption("Unified all-store inventory from Headset · refreshed Jul 19, 2026")
+
+        col_ds, col_dead = st.columns(2)
+        with col_ds:
+            ds = HS["days_supply"].copy()
+            if not ds.empty:
+                ds = ds.sort_values("days_remaining", ascending=True)
+
+                def _ds_color(d):
+                    if d < 30:   return "#dc2626"   # critical
+                    if d < 90:   return "#d97706"   # watch
+                    if d <= 365: return "#16a34a"   # healthy
+                    return "#2563eb"                # overstock
+
+                fig_ds = go.Figure(go.Bar(
+                    x=ds["days_remaining"], y=ds["category"], orientation="h",
+                    marker_color=[_ds_color(d) for d in ds["days_remaining"]],
+                    text=[f"{d:,.0f} d" for d in ds["days_remaining"]],
+                    textposition="outside", cliponaxis=False,
+                    hovertemplate="%{y}<br>%{x:,.0f} days · %{customdata:,.0f} units on hand<extra></extra>",
+                    customdata=ds["on_hand"],
+                ))
+                chart_layout(fig_ds, "Est. Days of Supply by Category", height=320)
+                fig_ds.update_layout(
+                    xaxis=dict(title="Days remaining", range=[0, ds["days_remaining"].max() * 1.18]),
+                    yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=10, r=60, t=40, b=10),
+                )
+                st.plotly_chart(fig_ds, use_container_width=True)
+
+        with col_dead:
+            dead = HS["dead_stock"].copy()
+            if not dead.empty:
+                dead = dead.sort_values("skus", ascending=True)
+                fig_dead = go.Figure(go.Bar(
+                    x=dead["skus"], y=dead["category"], orientation="h",
+                    marker_color=[COLORS.get(c, "#9ca3af") for c in dead["category"]],
+                    text=dead["skus"], textposition="outside", cliponaxis=False,
+                    hovertemplate="%{y}<br>%{x} SKUs in stock with no sales<extra></extra>",
+                ))
+                chart_layout(fig_dead, "Dead Stock — In-Stock SKUs with No Sales", height=320)
+                fig_dead.update_layout(
+                    xaxis=dict(title="Distinct SKUs", range=[0, dead["skus"].max() * 1.18]),
+                    yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=10, r=50, t=40, b=10),
+                )
+                st.plotly_chart(fig_dead, use_container_width=True)
+
+        # ── Reorder watchlist — lowest days-remaining SKUs actively selling ─────
+        pl = HS["product_list"].copy()
+        pl = pl[pl["store"].map(_clean_store).isin(isel_store) & pl["category"].isin(isel_cat)]
+        watch = pl[(pl["days_remaining"].notna()) & (pl["per_day"] > 0)].copy()
+        watch = watch.sort_values("days_remaining", ascending=True).head(15)
+        if not watch.empty:
+            st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+            rows_html = ""
+            for _, r in watch.iterrows():
+                d = r["days_remaining"]
+                color = "#dc2626" if d < 7 else ("#d97706" if d < 21 else "#374151")
+                sug = f"{int(r['suggested_order'])}" if r["suggested_order"] > 0 else "–"
+                rows_html += (
+                    f"<tr><td>{r['product']}</td><td>{r['store']}</td>"
+                    f"<td>{r['category']}</td>"
+                    f"<td style='text-align:right;'>{int(r['on_hand']):,}</td>"
+                    f"<td style='text-align:right;'>{r['per_day']:.1f}</td>"
+                    f"<td style='text-align:right;color:{color};font-weight:600;'>{d:,.0f}</td>"
+                    f"<td style='text-align:right;'>{sug}</td></tr>"
+                )
+            st.markdown(f"""<div class="data-card" style="height:auto;">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Product</th><th>Store</th><th>Category</th>
+                  <th style="text-align:right;">On-Hand</th>
+                  <th style="text-align:right;">Units/Day</th>
+                  <th style="text-align:right;">Days Left</th>
+                  <th style="text-align:right;">Sug. Order</th>
+                </tr></thead>
+                <tbody>{rows_html}</tbody>
+              </table>
+              <p class="data-note">15 fastest-to-stockout SKUs (currently selling) · Headset</p>
+            </div>""", unsafe_allow_html=True)
 
 
 if view == "Harvest":

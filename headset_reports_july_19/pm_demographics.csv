@@ -1,0 +1,19 @@
+Age Group,Customer Gender,Delivery Flag,Total Revenue
+26-35,M,Not Delivery,"$27,979.54"
+36-45,M,Not Delivery,"$22,865.85"
+46-55,M,Not Delivery,"$15,546.11"
+25 & under,M,Not Delivery,"$11,196.97"
+56-65,M,Not Delivery,"$7,970.89"
+36-45,F,Not Delivery,"$6,853.66"
+46-55,F,Not Delivery,"$6,279.60"
+26-35,F,Not Delivery,"$5,772.95"
+65+,M,Not Delivery,"$4,057.82"
+25 & under,F,Not Delivery,"$2,756.30"
+56-65,F,Not Delivery,"$2,604.05"
+65+,F,Not Delivery,"$2,594.18"
+36-45,M,Delivery,"$2,129.62"
+26-35,M,Delivery,"$1,465.38"
+46-55,F,Delivery,$741.23
+46-55,M,Delivery,$127.50
+Unknown,Unknown,Not Delivery,$84.00
+26-35,F,Delivery,$55.00
