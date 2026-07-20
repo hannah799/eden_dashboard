@@ -176,6 +176,60 @@ TEXT_COLOR = "#6b7280"
 
 G_PER_LB = 453.592
 
+# ══════════════════════════════════════════════════════════════════════════════
+# COMPANY ACTUALS — authoritative, transcribed from executive_reports_july_19/
+# (Power BI export, snapshot Jul 19 2026). Shared by the Retail Sales and
+# Plan vs Actuals views. Monthly net uses the KPI-panel figures (internally
+# consistent; June & July also tie to the per-door tables). May's per-door
+# screenshot was partial, so only Jun & Jul carry a reliable store breakdown.
+# July is month-to-date through Jul 19 (19 of 31 days).
+# ══════════════════════════════════════════════════════════════════════════════
+EXEC_MONTHLY = [
+    {"month": "May 2026",       "net": 55125.38,  "txns": 687, "patients": 468, "new": 377, "returning": 91,  "mtd": False},
+    {"month": "Jun 2026",       "net": 100087.80, "txns": 943, "patients": 645, "new": 512, "returning": 133, "mtd": False},
+    {"month": "Jul 2026 (MTD)", "net": 50743.40,  "txns": 538, "patients": 403, "new": 252, "returning": 151, "mtd": True},
+]
+EXEC_DOORS = {   # gross, net, unique patients per store
+    "Jun 2026": [
+        ("Cocoa Beach", 56088.0, 37740.73, 271), ("Orlando", 36852.5, 25259.17, 157),
+        ("Sarasota", 29952.0, 20063.16, 130), ("Tampa", 21816.5, 15249.66, 87),
+        ("Delivery Hub", 2780.0, 1775.08, 7),
+    ],
+    "Jul 2026 (MTD)": [
+        ("Cocoa Beach", 23110.0, 15815.58, 158), ("Sarasota", 19707.5, 12966.65, 91),
+        ("Orlando", 17477.0, 11865.85, 95), ("Tampa", 9638.5, 6793.34, 53),
+        ("Delivery Hub", 4967.5, 3303.05, 9),
+    ],
+}
+JUL_MTD_DAYS, JUL_TOTAL_DAYS = 19, 31   # July actual is through Jul 19
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLAN OF RECORD — Eden Plan.v5 (1).xlsx → Growth Curve tab (logistic ramp,
+# $300K/mo plateau per store, 12-mo inflection). Monthly figures below are GROSS
+# revenue by calendar month, 2026 (M01 = Jan 2026). Net = Gross × 0.83
+# (7% licensed-product fee + 10% patient discounts) — ties exactly to the Income
+# Statement (2026E gross $1,387,264 → net $1,151,429). The plan assumes a
+# STAGGERED ramp: Tampa live M1, Sarasota M2, Cocoa Beach M6, Orlando M7 — so a
+# store's early months read low against actuals where the real store opened sooner.
+# ══════════════════════════════════════════════════════════════════════════════
+PLAN_NET_FACTOR  = 0.83
+PLAN_MONTHS_2026 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+PLAN_GROSS_2026 = {
+    "Tampa":       [7979.10, 10671.36, 14227.76, 18892.01, 24951.81, 32729.05, 42555.32, 54727.66, 69442.56, 86715.15, 106303.11, 127667.24],
+    "Sarasota":    [0, 7979.10, 10671.36, 14227.76, 18892.01, 24951.81, 32729.05, 42555.32, 54727.66, 69442.56, 86715.15, 106303.11],
+    "Cocoa Beach": [0, 0, 0, 0, 0, 7979.10, 10671.36, 14227.76, 18892.01, 24951.81, 32729.05, 42555.32],
+    "Orlando":     [0, 0, 0, 0, 0, 0, 7979.10, 10671.36, 14227.76, 18892.01, 24951.81, 32729.05],
+}
+PLAN_TOTAL_GROSS_2026 = [7979.10, 18650.45, 24899.12, 33119.77, 43843.82, 65659.95, 93934.82, 122182.10, 165269.09, 210672.89, 264926.87, 336125.82]
+# 2026E full-year plan P&L (Income Statement tab) — annual targets for context.
+PLAN_2026E = {
+    "gross_revenue": 1387263.8, "net_revenue": 1151429.0, "cogs": 789787.5,
+    "gross_profit": 361641.4, "gross_margin": 0.314, "opex": 5531900.0,
+    "ebitda": -5019489.4, "net_income": -6018474.4, "avg_ticket": 90.0,
+    "stores_eoy": 6,
+}
+STORE_COLORS = {"Tampa": "#2d6a4f", "Sarasota": "#2563eb", "Cocoa Beach": "#d97706", "Orlando": "#7c3aed"}
+
 
 def chart_layout(fig, title="", height=340):
     fig.update_layout(
@@ -759,7 +813,7 @@ st.markdown(f"""<div class="story-banner">
 </div>""", unsafe_allow_html=True)
 
 
-view = st.radio("", ["Retail Sales", "Inventory", "Harvest"], horizontal=True, label_visibility="collapsed")
+view = st.radio("", ["Retail Sales", "Inventory", "Harvest", "Plan vs Actuals"], horizontal=True, label_visibility="collapsed")
 
 
 # ── Filter helpers ─────────────────────────────────────────────────────────────
@@ -775,32 +829,8 @@ def _options(*series):
 
 if view == "Retail Sales":
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # EXECUTIVE SUMMARY — authoritative company actuals through July.
-    # Transcribed from executive_reports_july_19/ (Power BI export, snapshot
-    # Jul 19 2026). Monthly net sales use the KPI-panel figures (internally
-    # consistent; June & July also tie out to the per-door tables). May's
-    # per-door screenshot was a partial capture, so only Jun & Jul carry a
-    # reliable store-level breakdown. July is month-to-date (through Jul 19).
-    # ══════════════════════════════════════════════════════════════════════════
-    EXEC_MONTHLY = [
-        {"month": "May 2026",       "net": 55125.38,  "txns": 687, "patients": 468, "new": 377, "returning": 91,  "mtd": False},
-        {"month": "Jun 2026",       "net": 100087.80, "txns": 943, "patients": 645, "new": 512, "returning": 133, "mtd": False},
-        {"month": "Jul 2026 (MTD)", "net": 50743.40,  "txns": 538, "patients": 403, "new": 252, "returning": 151, "mtd": True},
-    ]
-    EXEC_DOORS = {   # gross, net, unique patients per store
-        "Jun 2026": [
-            ("Cocoa Beach", 56088.0, 37740.73, 271), ("Orlando", 36852.5, 25259.17, 157),
-            ("Sarasota", 29952.0, 20063.16, 130), ("Tampa", 21816.5, 15249.66, 87),
-            ("Delivery Hub", 2780.0, 1775.08, 7),
-        ],
-        "Jul 2026 (MTD)": [
-            ("Cocoa Beach", 23110.0, 15815.58, 158), ("Sarasota", 19707.5, 12966.65, 91),
-            ("Orlando", 17477.0, 11865.85, 95), ("Tampa", 9638.5, 6793.34, 53),
-            ("Delivery Hub", 4967.5, 3303.05, 9),
-        ],
-    }
-
+    # Company actuals (EXEC_MONTHLY / EXEC_DOORS) are defined at module level and
+    # shared with the Plan vs Actuals view.
     st.subheader("Executive Summary")
     st.caption("Company actuals through July · executive reports (Power BI), snapshot Jul 19, 2026 · July is month-to-date")
 
@@ -2023,6 +2053,226 @@ if view == "Harvest":
             )}</tbody>
           </table>
         </div>""", unsafe_allow_html=True)
+
+
+if view == "Plan vs Actuals":
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Plan of record = Eden Plan.v5 Growth Curve (monthly gross → net ×0.83).
+    # Actuals = company executive reports (net sales), May–Jul 2026.
+    # Month index: Jan=0 … Dec=11.  Last full actual month = June (idx 5).
+    # ──────────────────────────────────────────────────────────────────────────
+    def _plan_net(gross):
+        return gross * PLAN_NET_FACTOR
+
+    plan_net_month = [_plan_net(g) for g in PLAN_TOTAL_GROSS_2026]
+    act_net = {"May": 55125.38, "Jun": 100087.80, "Jul": 50743.40}  # from EXEC_MONTHLY
+    IMAY, IJUN, IJUL = 4, 5, 6
+
+    # June = the most reliable head-to-head (both full month, store breakdown exists).
+    jun_plan, jun_act = plan_net_month[IJUN], act_net["Jun"]
+    jun_var = (jun_act - jun_plan) / jun_plan
+    # July: actual is MTD (19/31 days) — prorate the plan to match for fairness.
+    jul_plan_full = plan_net_month[IJUL]
+    jul_plan_mtd  = jul_plan_full * JUL_MTD_DAYS / JUL_TOTAL_DAYS
+    jul_var = (act_net["Jul"] - jul_plan_mtd) / jul_plan_mtd
+    # Actual net booked May–Jul (Jul is MTD) vs full-year plan target.
+    act_booked = sum(act_net.values())
+    booked_pct = act_booked / PLAN_2026E["net_revenue"]
+    # Avg ticket (June, full month).
+    jun_ticket_act = 100087.80 / 943
+
+    def _delta_html(var, good_up=True):
+        favorable = (var >= 0) if good_up else (var <= 0)
+        color = "#059669" if favorable else "#dc2626"
+        arrow = "▲" if var >= 0 else "▼"
+        return f'<span style="color:{color};font-weight:700;">{arrow} {abs(var)*100:,.0f}%</span>'
+
+    st.subheader("Plan vs Actuals")
+    st.caption(
+        "Plan of record: Eden Plan.v5 · Growth Curve (logistic ramp, net = gross × 0.83) · "
+        "Actuals: company executive reports (net sales), snapshot Jul 19, 2026 · "
+        "Plan months anchored M01 = Jan 2026 · July actual is month-to-date (19 of 31 days)"
+    )
+
+    # ── Story banner ──────────────────────────────────────────────────────────
+    _dir = "ahead of" if jun_var >= 0 else "behind"
+    st.markdown(f"""<div class="story-banner">
+      <p class="story-head">June net sales ran {abs(jun_var)*100:,.0f}% {_dir} plan — ${jun_act:,.0f} actual vs ${jun_plan:,.0f} planned</p>
+      <p class="story-sub">All four stores are already live and selling, while the plan modeled a staggered ramp
+      (Cocoa Beach opening M6, Orlando M7). Cocoa Beach and Orlando are the outperformers; Tampa trails its plan curve.
+      July is tracking on plan on a prorated basis.</p>
+    </div>""", unsafe_allow_html=True)
+
+    # ── KPI row ───────────────────────────────────────────────────────────────
+    k1, k2, k3, k4, k5 = st.columns(5)
+    with k1:
+        st.markdown(f"""<div class="kpi-hero">
+          <div class="kpi-label-hero">June Net · Actual vs Plan</div>
+          <div class="kpi-value-hero">${jun_act:,.0f}</div>
+          <div class="kpi-sub-hero">Plan ${jun_plan:,.0f} · {'+' if jun_var>=0 else ''}{jun_var*100:,.0f}% vs plan</div>
+        </div>""", unsafe_allow_html=True)
+    _kpis = [
+        (k2, "2026 Plan Net Revenue", f"${PLAN_2026E['net_revenue']:,.0f}", "Full-year target (Plan.v5)"),
+        (k3, "Actual Net Booked · May–Jul", f"${act_booked:,.0f}", f"{booked_pct*100:,.0f}% of full-year plan (Jul MTD)"),
+        (k4, "Avg Ticket · June", f"${jun_ticket_act:,.0f}", f"Plan ${PLAN_2026E['avg_ticket']:,.0f}"),
+        (k5, "July MTD vs Plan", f"{'+' if jul_var>=0 else ''}{jul_var*100:,.0f}%", "Plan prorated to 19 days"),
+    ]
+    for col, label, value, sub in _kpis:
+        with col:
+            st.markdown(f"""<div class="kpi-card">
+              <div class="kpi-label">{label}</div>
+              <div class="kpi-value">{value}</div>
+              <div class="kpi-sub">{sub}</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+
+    # ── Monthly net: plan vs actual (grouped bars) ────────────────────────────
+    col_bar, col_curve = st.columns(2)
+    with col_bar:
+        _months = ["May", "Jun", "Jul (MTD)"]
+        _plan_vals = [plan_net_month[IMAY], plan_net_month[IJUN], jul_plan_mtd]
+        _act_vals  = [act_net["May"], act_net["Jun"], act_net["Jul"]]
+        fig_b = go.Figure()
+        fig_b.add_trace(go.Bar(
+            name="Plan", x=_months, y=_plan_vals, marker_color="#b7d3c2",
+            text=[f"${v:,.0f}" for v in _plan_vals], textposition="outside", cliponaxis=False,
+            hovertemplate="%{x}<br>Plan $%{y:,.0f}<extra></extra>"))
+        fig_b.add_trace(go.Bar(
+            name="Actual", x=_months, y=_act_vals, marker_color="#1a4731",
+            text=[f"${v:,.0f}" for v in _act_vals], textposition="outside", cliponaxis=False,
+            hovertemplate="%{x}<br>Actual $%{y:,.0f}<extra></extra>"))
+        fig_b.update_layout(barmode="group", yaxis=dict(range=[0, max(_act_vals + _plan_vals) * 1.25]))
+        chart_layout(fig_b, "Net Sales — Plan vs Actual by Month", height=330)
+        legend_below_title(fig_b)
+        st.plotly_chart(fig_b, use_container_width=True)
+
+    with col_curve:
+        fig_c = go.Figure()
+        fig_c.add_trace(go.Scatter(
+            name="Plan curve (2026)", x=PLAN_MONTHS_2026, y=plan_net_month,
+            mode="lines+markers", line=dict(color="#74c69d", width=2),
+            marker=dict(size=5), hovertemplate="%{x}<br>Plan $%{y:,.0f}<extra></extra>"))
+        fig_c.add_trace(go.Scatter(
+            name="Actual (full month)", x=["May", "Jun"], y=[act_net["May"], act_net["Jun"]],
+            mode="markers", marker=dict(size=13, color="#1a4731", symbol="circle"),
+            hovertemplate="%{x}<br>Actual $%{y:,.0f}<extra></extra>"))
+        fig_c.add_trace(go.Scatter(
+            name="Actual (Jul MTD)", x=["Jul"], y=[act_net["Jul"]],
+            mode="markers", marker=dict(size=13, color="#d97706", symbol="diamond"),
+            hovertemplate="Jul MTD<br>Actual $%{y:,.0f}<extra></extra>"))
+        chart_layout(fig_c, "2026 Revenue Ramp — Plan Curve vs Actuals", height=330)
+        legend_below_title(fig_c)
+        st.plotly_chart(fig_c, use_container_width=True)
+
+    # ── Store-level plan vs actual (June, last full month) ────────────────────
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    jun_door = {d[0]: d for d in EXEC_DOORS["Jun 2026"]}
+    store_rows = ["Tampa", "Sarasota", "Cocoa Beach", "Orlando"]
+    rows_html = ""
+    for s in store_rows:
+        p = _plan_net(PLAN_GROSS_2026[s][IJUN])
+        a = jun_door[s][2]  # net
+        if p > 0:
+            var = (a - p) / p
+            var_html = _delta_html(var)
+        else:
+            var_html = '<span style="color:#059669;font-weight:700;">new — plan $0</span>'
+        rows_html += (
+            f"<tr><td>{s}</td>"
+            f"<td style='text-align:right;'>${p:,.0f}</td>"
+            f"<td style='text-align:right;'>${a:,.0f}</td>"
+            f"<td style='text-align:right;'>{var_html}</td></tr>"
+        )
+    _tot_p = sum(_plan_net(PLAN_GROSS_2026[s][IJUN]) for s in store_rows)
+    _tot_a = sum(jun_door[s][2] for s in store_rows)
+    _tot_var = (_tot_a - _tot_p) / _tot_p
+    rows_html += (
+        f"<tr style='border-top:2px solid #e5e7eb;font-weight:700;'><td>Total (4 stores)</td>"
+        f"<td style='text-align:right;'>${_tot_p:,.0f}</td>"
+        f"<td style='text-align:right;'>${_tot_a:,.0f}</td>"
+        f"<td style='text-align:right;'>{_delta_html(_tot_var)}</td></tr>"
+    )
+    col_tbl, col_var = st.columns(2)
+    with col_tbl:
+        st.markdown(f"""<div class="data-card" style="height:auto;">
+          <table class="data-table">
+            <thead><tr>
+              <th>Store</th>
+              <th style="text-align:right;">Plan Net (Jun)</th>
+              <th style="text-align:right;">Actual Net (Jun)</th>
+              <th style="text-align:right;">vs Plan</th>
+            </tr></thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+          <p class="data-note">June net sales per store · plan = Growth Curve gross × 0.83. Cocoa Beach opens M6 and
+          Orlando M7 in the plan, so their ramp positions lag the already-open real stores.</p>
+        </div>""", unsafe_allow_html=True)
+
+    with col_var:
+        _order = sorted(store_rows, key=lambda s: jun_door[s][2] - _plan_net(PLAN_GROSS_2026[s][IJUN]))
+        _plan_s = [_plan_net(PLAN_GROSS_2026[s][IJUN]) for s in _order]
+        _act_s  = [jun_door[s][2] for s in _order]
+        fig_s = go.Figure()
+        fig_s.add_trace(go.Bar(
+            name="Plan", y=_order, x=_plan_s, orientation="h", marker_color="#b7d3c2",
+            hovertemplate="%{y}<br>Plan $%{x:,.0f}<extra></extra>"))
+        fig_s.add_trace(go.Bar(
+            name="Actual", y=_order, x=_act_s, orientation="h", marker_color="#1a4731",
+            hovertemplate="%{y}<br>Actual $%{x:,.0f}<extra></extra>"))
+        fig_s.update_layout(barmode="group")
+        chart_layout(fig_s, "June Net by Store — Plan vs Actual", height=330)
+        legend_below_title(fig_s)
+        st.plotly_chart(fig_s, use_container_width=True)
+
+    # ── 2026 annual P&L: plan target vs actual-to-date ────────────────────────
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    pnl_rows = [
+        ("Net Revenue",  PLAN_2026E["net_revenue"], act_booked, "May–Jul actual (Jul MTD)"),
+        ("Gross Revenue (est.)", PLAN_2026E["gross_revenue"], act_booked / PLAN_NET_FACTOR, "Actual net ÷ 0.83"),
+        ("COGS",         PLAN_2026E["cogs"], None, "No actual P&L yet"),
+        ("Gross Profit", PLAN_2026E["gross_profit"], None, "No actual P&L yet"),
+        ("Operating Expenses", PLAN_2026E["opex"], None, "No actual P&L yet"),
+        ("EBITDA",       PLAN_2026E["ebitda"], None, "No actual P&L yet"),
+        ("Net Income",   PLAN_2026E["net_income"], None, "No actual P&L yet"),
+    ]
+    pnl_html = ""
+    for label, plan_v, act_v, note in pnl_rows:
+        act_cell = f"${act_v:,.0f}" if act_v is not None else "<span style='color:#9ca3af;'>—</span>"
+        plan_cell = f"(${abs(plan_v):,.0f})" if plan_v < 0 else f"${plan_v:,.0f}"
+        pnl_html += (
+            f"<tr><td>{label}</td>"
+            f"<td style='text-align:right;'>{plan_cell}</td>"
+            f"<td style='text-align:right;'>{act_cell}</td>"
+            f"<td style='color:#9ca3af;font-size:0.72rem;'>{note}</td></tr>"
+        )
+    st.markdown(f"""<div class="data-card" style="height:auto;">
+      <table class="data-table">
+        <thead><tr>
+          <th>2026 Line Item</th>
+          <th style="text-align:right;">Plan (2026E)</th>
+          <th style="text-align:right;">Actual to date</th>
+          <th>Basis</th>
+        </tr></thead>
+        <tbody>{pnl_html}</tbody>
+      </table>
+      <p class="data-note">Full-year 2026E plan from Eden Plan.v5 Income Statement. Actuals exist only for revenue
+      (company executive reports); cost/margin lines have no reported actuals yet, so only the plan target is shown.</p>
+    </div>""", unsafe_allow_html=True)
+
+    # ── Methodology / caveats ─────────────────────────────────────────────────
+    st.markdown(f"""<div class="alert-box">
+      <div class="alert-title">How to read this</div>
+      <div class="alert-body">
+        Plan figures come from Eden Plan.v5's Growth Curve (a logistic ramp to a $300K/mo plateau per store),
+        converted from gross to net by ×0.83 (7% licensed-product fee + 10% patient discounts) to match the way
+        actual net sales are reported. Plan months are anchored M01 = January 2026. The plan modeled stores opening
+        on a stagger (Tampa Jan, Sarasota Feb, Cocoa Beach June, Orlando July); in reality all four are already
+        trading, so a store's early-plan months can read artificially low. June is the cleanest head-to-head
+        (both full-month, with a store breakdown); July's actual is month-to-date, so its plan is prorated to 19 days.
+      </div>
+    </div>""", unsafe_allow_html=True)
 
 
 st.caption("Eden Cannabis · Confidential · June 2026")
