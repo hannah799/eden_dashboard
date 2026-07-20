@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from collections import defaultdict
 import openpyxl
-import os, csv
+import os, csv, re
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -112,6 +112,10 @@ st.markdown("""
   }
   .data-table tr:last-child td { border-bottom: none; }
   .data-note { color: #9ca3af; font-size: 0.68rem; margin: 10px 0 0 0; }
+  .data-card-title {
+    color: #1a4731; font-size: 0.95rem; font-weight: 600;
+    margin: 0 0 12px 0;
+  }
 
   /* ── Filter controls ───────────────────────────────────────────────────── */
   .filter-bar {
@@ -202,6 +206,51 @@ EXEC_DOORS = {   # gross, net, unique patients per store
     ],
 }
 JUL_MTD_DAYS, JUL_TOTAL_DAYS = 19, 31   # July actual is through Jul 19
+
+# ── Weekly sales by store — Sweed "Sales v2" advanced report (NEW-CPA-Weekly) ──
+# One-week export (Store × Timestamp detail, net + gross). Refresh: drop the new
+# "<date> NEW-CPA-Weekly Report.xlsx" in the repo root and update CPA_WEEKLY_FILE.
+CPA_WEEKLY_FILE = "2026-07-19 NEW-CPA-Weekly Report.xlsx"
+_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+@st.cache_data(ttl=300)
+def load_weekly_cpa(path=CPA_WEEKLY_FILE):
+    """Aggregate the weekly Sweed report to net/gross/txns per store."""
+    if not os.path.exists(path):
+        return None
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    rows = list(wb.active.iter_rows(values_only=True))
+    wb.close()
+
+    # Friendly week label from the "Date filter: m/d/yyyy ..m/d/yyyy .." header.
+    span = ""
+    for r in rows[:10]:
+        if r[0] and str(r[0]).startswith("Date filter:"):
+            ds = re.findall(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(r[0]))
+            if len(ds) >= 2:
+                (m0, d0, _), (m1, d1, y1) = ds[0], ds[1]
+                a = f"{_MONTHS[int(m0) - 1]} {int(d0)}"
+                b = (f"{int(d1)}" if m0 == m1
+                     else f"{_MONTHS[int(m1) - 1]} {int(d1)}")
+                span = f"{a}–{b}, {y1}"
+            break
+
+    # Aggregate the "Store | Timestamp | Net sales | Gross sales" detail block.
+    hdr = next((i for i, r in enumerate(rows)
+                if r[0] == "Store" and r[1] == "Timestamp"), None)
+    agg = {}
+    if hdr is not None:
+        for r in rows[hdr + 1:]:
+            store, ts, net, gross = r[0], r[1], r[2], r[3]
+            if not store or not ts:
+                continue
+            name = str(store).replace("Eden - ", "").replace("Eden FL - ", "").strip()
+            a = agg.setdefault(name, {"net": 0.0, "gross": 0.0, "txns": 0})
+            a["net"] += net or 0
+            a["gross"] += gross or 0
+            a["txns"] += 1
+    return {"span": span, "stores": agg}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PLAN OF RECORD — Eden Plan.v5 (1).xlsx → Growth Curve tab (logistic ramp,
@@ -913,6 +962,49 @@ if view == "Retail Sales":
       </table>
       <p class="data-note">Net sales per door · executive reports. July is month-to-date through Jul 19.</p>
     </div>""", unsafe_allow_html=True)
+
+    # ── Weekly sales by store (latest Sweed NEW-CPA-Weekly report) ────────────
+    _wk = load_weekly_cpa()
+    if _wk and _wk["stores"]:
+        _order = ["Cocoa Beach", "Orlando", "Sarasota", "Tampa", "Delivery Hub"]
+        _stores = sorted(
+            _wk["stores"].items(),
+            key=lambda kv: (_order.index(kv[0]) if kv[0] in _order else 99, -kv[1]["net"]),
+        )
+        _tot = {"net": 0.0, "gross": 0.0, "txns": 0}
+        wk_rows = ""
+        for name, a in _stores:
+            for k in _tot:
+                _tot[k] += a[k]
+            _tik = a["net"] / a["txns"] if a["txns"] else 0
+            wk_rows += (
+                f"<tr><td>{name}</td>"
+                f"<td style='text-align:right;'>${a['net']:,.0f}</td>"
+                f"<td style='text-align:right;'>${a['gross']:,.0f}</td>"
+                f"<td style='text-align:right;'>{a['txns']:,}</td>"
+                f"<td style='text-align:right;'>${_tik:,.0f}</td></tr>"
+            )
+        _ttik = _tot["net"] / _tot["txns"] if _tot["txns"] else 0
+        wk_rows += (
+            f"<tr style='font-weight:600;border-top:2px solid #1a4731;'><td>Total</td>"
+            f"<td style='text-align:right;'>${_tot['net']:,.0f}</td>"
+            f"<td style='text-align:right;'>${_tot['gross']:,.0f}</td>"
+            f"<td style='text-align:right;'>{_tot['txns']:,}</td>"
+            f"<td style='text-align:right;'>${_ttik:,.0f}</td></tr>"
+        )
+        _wk_label = f" · week of {_wk['span']}" if _wk["span"] else ""
+        st.markdown(f"""<div class="data-card" style="height:auto;">
+          <div class="data-card-title">Weekly Sales by Store{_wk_label}</div>
+          <table class="data-table">
+            <thead>
+              <tr><th>Store</th>
+                  <th style="text-align:right;">Net</th><th style="text-align:right;">Gross</th>
+                  <th style="text-align:right;">Transactions</th><th style="text-align:right;">Avg Ticket</th></tr>
+            </thead>
+            <tbody>{wk_rows}</tbody>
+          </table>
+          <p class="data-note">Sweed "Sales v2" weekly report (NEW-CPA-Weekly). Avg ticket = net ÷ transactions.</p>
+        </div>""", unsafe_allow_html=True)
 
     st.divider()
 
