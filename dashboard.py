@@ -764,6 +764,116 @@ def _options(*series):
 
 if view == "Retail Sales":
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # EXECUTIVE SUMMARY — authoritative company actuals through July.
+    # Transcribed from executive_reports_july_19/ (Power BI export, snapshot
+    # Jul 19 2026). Monthly net sales use the KPI-panel figures (internally
+    # consistent; June & July also tie out to the per-door tables). May's
+    # per-door screenshot was a partial capture, so only Jun & Jul carry a
+    # reliable store-level breakdown. July is month-to-date (through Jul 19).
+    # ══════════════════════════════════════════════════════════════════════════
+    EXEC_MONTHLY = [
+        {"month": "May 2026",       "net": 55125.38,  "txns": 687, "patients": 468, "new": 377, "returning": 91,  "mtd": False},
+        {"month": "Jun 2026",       "net": 100087.80, "txns": 943, "patients": 645, "new": 512, "returning": 133, "mtd": False},
+        {"month": "Jul 2026 (MTD)", "net": 50743.40,  "txns": 538, "patients": 403, "new": 252, "returning": 151, "mtd": True},
+    ]
+    EXEC_DOORS = {   # gross, net, unique patients per store
+        "Jun 2026": [
+            ("Cocoa Beach", 56088.0, 37740.73, 271), ("Orlando", 36852.5, 25259.17, 157),
+            ("Sarasota", 29952.0, 20063.16, 130), ("Tampa", 21816.5, 15249.66, 87),
+            ("Delivery Hub", 2780.0, 1775.08, 7),
+        ],
+        "Jul 2026 (MTD)": [
+            ("Cocoa Beach", 23110.0, 15815.58, 158), ("Sarasota", 19707.5, 12966.65, 91),
+            ("Orlando", 17477.0, 11865.85, 95), ("Tampa", 9638.5, 6793.34, 53),
+            ("Delivery Hub", 4967.5, 3303.05, 9),
+        ],
+    }
+
+    st.subheader("Executive Summary")
+    st.caption("Company actuals through July · executive reports (Power BI), snapshot Jul 19, 2026 · July is month-to-date")
+
+    _jul = EXEC_MONTHLY[-1]
+    _jun = EXEC_MONTHLY[-2]
+    e1, e2, e3, e4, e5 = st.columns(5)
+    with e1:
+        st.markdown(f"""<div class="kpi-hero">
+          <div class="kpi-label-hero">Net Sales · July MTD</div>
+          <div class="kpi-value-hero">${_jul['net']:,.0f}</div>
+          <div class="kpi-sub-hero">June (full month): ${_jun['net']:,.0f}</div>
+        </div>""", unsafe_allow_html=True)
+    for col, label, value, sub in [
+        (e2, "Patients · July",      f"{_jul['patients']:,}",  f"{_jun['patients']:,} in June"),
+        (e3, "New Patients · July",  f"{_jul['new']:,}",       f"{_jul['returning']:,} returning"),
+        (e4, "Transactions · July",  f"{_jul['txns']:,}",      f"{_jun['txns']:,} in June"),
+        (e5, "Avg Ticket · July",    f"${_jul['net']/_jul['txns']:,.0f}", "Net ÷ transactions"),
+    ]:
+        with col:
+            st.markdown(f"""<div class="kpi-card">
+              <div class="kpi-label">{label}</div>
+              <div class="kpi-value">{value}</div>
+              <div class="kpi-sub">{sub}</div>
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+    col_ns, col_pat = st.columns(2)
+    with col_ns:
+        _labels = [m["month"] for m in EXEC_MONTHLY]
+        _nets   = [m["net"] for m in EXEC_MONTHLY]
+        _bar_c  = ["#74c69d" if m["mtd"] else "#1a4731" for m in EXEC_MONTHLY]
+        fig_ns = go.Figure(go.Bar(
+            x=_labels, y=_nets, marker_color=_bar_c,
+            text=[f"${v:,.0f}" for v in _nets], textposition="outside", cliponaxis=False,
+            hovertemplate="%{x}<br>$%{y:,.0f} net sales<extra></extra>",
+        ))
+        chart_layout(fig_ns, "Company Net Sales by Month", height=300)
+        fig_ns.update_layout(yaxis=dict(range=[0, max(_nets) * 1.2]), margin=dict(l=10, r=10, t=40, b=10))
+        st.plotly_chart(fig_ns, use_container_width=True)
+
+    with col_pat:
+        fig_pat = go.Figure()
+        fig_pat.add_trace(go.Bar(
+            name="New", x=[m["month"] for m in EXEC_MONTHLY], y=[m["new"] for m in EXEC_MONTHLY],
+            marker_color="#2d6a4f", hovertemplate="%{x}<br>%{y} new<extra></extra>"))
+        fig_pat.add_trace(go.Bar(
+            name="Returning", x=[m["month"] for m in EXEC_MONTHLY], y=[m["returning"] for m in EXEC_MONTHLY],
+            marker_color="#d97706", hovertemplate="%{x}<br>%{y} returning<extra></extra>"))
+        fig_pat.update_layout(barmode="stack", legend=dict(orientation="h", y=1.15), yaxis_title="")
+        chart_layout(fig_pat, "Unique Patients — New vs Returning", height=300)
+        st.plotly_chart(fig_pat, use_container_width=True)
+
+    # Store-level door breakdown — June (last full month) vs July MTD
+    door_rows = ["Cocoa Beach", "Sarasota", "Orlando", "Tampa", "Delivery Hub"]
+    jun_map = {d[0]: d for d in EXEC_DOORS["Jun 2026"]}
+    jul_map = {d[0]: d for d in EXEC_DOORS["Jul 2026 (MTD)"]}
+    rows_html = ""
+    for store in door_rows:
+        j = jun_map.get(store); k = jul_map.get(store)
+        rows_html += (
+            f"<tr><td>{store}</td>"
+            f"<td style='text-align:right;'>${j[1]:,.0f}</td>"
+            f"<td style='text-align:right;'>${j[2]:,.0f}</td>"
+            f"<td style='text-align:right;'>{j[3]}</td>"
+            f"<td style='text-align:right;border-left:1px solid #e5e7eb;'>${k[1]:,.0f}</td>"
+            f"<td style='text-align:right;'>${k[2]:,.0f}</td>"
+            f"<td style='text-align:right;'>{k[3]}</td></tr>"
+        )
+    st.markdown(f"""<div class="data-card" style="height:auto;">
+      <table class="data-table">
+        <thead>
+          <tr><th></th><th colspan="3" style="text-align:center;border-bottom:1px solid #e5e7eb;">June (full month)</th>
+              <th colspan="3" style="text-align:center;border-left:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;">July (MTD)</th></tr>
+          <tr><th>Store</th>
+              <th style="text-align:right;">Gross</th><th style="text-align:right;">Net</th><th style="text-align:right;">Patients</th>
+              <th style="text-align:right;border-left:1px solid #e5e7eb;">Gross</th><th style="text-align:right;">Net</th><th style="text-align:right;">Patients</th></tr>
+        </thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+      <p class="data-note">Net sales per door · executive reports. July is month-to-date through Jul 19.</p>
+    </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
     # ── Filters ───────────────────────────────────────────────────────────────
     _cat_opts   = _options(sw_dedup["category"], al_notampa["cat_norm"], store_df["category"])
     _store_opts = _options(
