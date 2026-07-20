@@ -2166,6 +2166,59 @@ if view == "Plan vs Actuals":
         legend_below_title(fig_c)
         st.plotly_chart(fig_c, use_container_width=True)
 
+    # ── Full-year monthly table: plan vs actual (all 12 months of 2026) ───────
+    st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
+    act_by_idx = {IMAY: act_net["May"], IJUN: act_net["Jun"], IJUL: act_net["Jul"]}
+    mrows = ""
+    for i, mon in enumerate(PLAN_MONTHS_2026):
+        p = plan_net_month[i]
+        a = act_by_idx.get(i)
+        label = f"{mon} 2026" + (" (MTD)" if i == IJUL else "")
+        if a is None:                       # no reported actuals yet
+            act_cell = d_cell = pct_cell = "<span style='color:#9ca3af;'>—</span>"
+        elif i == IJUL:                     # partial month — don't compare to a full-month plan
+            act_cell = f"${a:,.0f}"
+            d_cell   = "<span style='color:#9ca3af;'>—</span>"
+            pct_cell = "<span style='color:#9ca3af;'>MTD*</span>"
+        else:
+            delta = a - p
+            sign  = "+" if delta >= 0 else "−"
+            dc    = "#059669" if delta >= 0 else "#dc2626"
+            act_cell = f"${a:,.0f}"
+            d_cell   = f"<span style='color:{dc};'>{sign}${abs(delta):,.0f}</span>"
+            pct_cell = _delta_html((a - p) / p)
+        mrows += (
+            f"<tr><td>{label}</td>"
+            f"<td style='text-align:right;'>${p:,.0f}</td>"
+            f"<td style='text-align:right;'>{act_cell}</td>"
+            f"<td style='text-align:right;'>{d_cell}</td>"
+            f"<td style='text-align:right;'>{pct_cell}</td></tr>"
+        )
+    mrows += (
+        f"<tr style='border-top:2px solid #e5e7eb;font-weight:700;'>"
+        f"<td>2026 Total</td>"
+        f"<td style='text-align:right;'>${PLAN_2026E['net_revenue']:,.0f}</td>"
+        f"<td style='text-align:right;'>${act_booked:,.0f}</td>"
+        f"<td style='text-align:right;color:#9ca3af;font-weight:400;'>May–Jul booked</td>"
+        f"<td style='text-align:right;color:#9ca3af;font-weight:400;'>{booked_pct*100:,.0f}% of plan</td></tr>"
+    )
+    st.markdown(f"""<div class="data-card" style="height:auto;">
+      <table class="data-table">
+        <thead><tr>
+          <th>Month</th>
+          <th style="text-align:right;">Plan Net</th>
+          <th style="text-align:right;">Actual Net</th>
+          <th style="text-align:right;">Δ vs Plan</th>
+          <th style="text-align:right;">Δ %</th>
+        </tr></thead>
+        <tbody>{mrows}</tbody>
+      </table>
+      <p class="data-note">Monthly net sales · plan = Growth Curve gross × 0.83. Actuals from company executive
+      reports — Jan–Apr and Aug–Dec have no reported actuals yet. *July is month-to-date (19 of 31 days); on a
+      prorated basis it runs {'+' if jul_var>=0 else ''}{jul_var*100:,.0f}% vs plan, so the full-month variance is
+      left blank to avoid a misleading partial-month gap.</p>
+    </div>""", unsafe_allow_html=True)
+
     # ── Store-level plan vs actual (June, last full month) ────────────────────
     st.markdown("<div style='height:6px;'></div>", unsafe_allow_html=True)
     jun_door = {d[0]: d for d in EXEC_DOORS["Jun 2026"]}
