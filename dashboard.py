@@ -1101,7 +1101,21 @@ if view == "Retail Sales":
     elif HS:
         st.divider()
         st.subheader("Headset Analytics")
-        st.caption("Unified all-store reporting from Headset · through Jul 6, 2026")
+
+        # Headset covers different (and internally varying) date windows than the
+        # sections above — surface each so the timescales are never confused.
+        _wk_range = _pm_range = ""
+        if not HS["weekly"].empty:
+            _w = HS["weekly"]["week"]
+            _wk_range = f"{_w.min():%b %-d} – {_w.max():%b %-d, %Y}"
+        if not HS["pm_weekly"].empty:
+            _p = HS["pm_weekly"]["week"]
+            _pm_range = f"{_p.min():%b %-d} – {_p.max():%b %-d, %Y}"
+        st.caption(
+            f"Different window than the sections above — weekly sales cover "
+            f"{_wk_range or 'n/a'}; delivery, demographic & hourly views cover "
+            f"{_pm_range or 'n/a'}."
+        )
 
         STORE_COLORS_HS = {
             "Tampa": "#2d6a4f", "Sarasota": "#2563eb",
@@ -1123,7 +1137,7 @@ if view == "Retail Sales":
                     hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>" + store + "</extra>",
                 ))
             fig_wk.update_layout(yaxis_title="")
-            chart_layout(fig_wk, "Weekly Gross Revenue by Store", height=340)
+            chart_layout(fig_wk, f"Weekly Gross Revenue by Store  ·  {_wk_range}", height=340)
             legend_below_title(fig_wk)
             st.plotly_chart(fig_wk, use_container_width=True)
 
@@ -1166,7 +1180,7 @@ if view == "Retail Sales":
                     name="Delivery", x=pmw["week"], y=pmw["Delivery"], marker_color="#059669",
                     hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>Delivery</extra>"))
                 fig_pm.update_layout(barmode="stack", yaxis_title="")
-                chart_layout(fig_pm, "Weekly Revenue — In-Store vs Delivery", height=320)
+                chart_layout(fig_pm, f"In-Store vs Delivery  ·  {_pm_range}", height=320)
                 legend_below_title(fig_pm)
                 st.plotly_chart(fig_pm, use_container_width=True)
 
@@ -1183,7 +1197,7 @@ if view == "Retail Sales":
                         x=d["age"], y=d["gross"].fillna(0), marker_color=color,
                         hovertemplate="%{x}  $%{y:,.0f}<extra>" + gender + "</extra>"))
                 fig_dm.update_layout(barmode="stack", yaxis_title="")
-                chart_layout(fig_dm, "Revenue by Age Group & Gender", height=320)
+                chart_layout(fig_dm, f"Revenue by Age & Gender  ·  {_pm_range}", height=320)
                 legend_below_title(fig_dm)
                 st.plotly_chart(fig_dm, use_container_width=True)
 
@@ -1201,7 +1215,7 @@ if view == "Retail Sales":
                 hovertemplate="%{y} %{x}  $%{z:,.0f}<extra></extra>",
                 colorbar=dict(title="", thickness=10),
             ))
-            chart_layout(fig_hm, "Sales by Day of Week & Hour", height=300)
+            chart_layout(fig_hm, f"Sales by Day & Hour  ·  {_pm_range}", height=300)
             fig_hm.update_layout(yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig_hm, use_container_width=True)
 
