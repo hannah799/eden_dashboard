@@ -190,6 +190,17 @@ def chart_layout(fig, title="", height=340):
     return fig
 
 
+def legend_below_title(fig, right=10):
+    """Sit a horizontal legend just under the (top-left) title instead of on top
+    of it — call AFTER chart_layout so the wider top margin wins."""
+    fig.update_layout(
+        margin=dict(l=10, r=right, t=64, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0.5, xanchor="center",
+                    bgcolor="rgba(0,0,0,0)", font=dict(color="#374151", size=11)),
+    )
+    return fig
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DATA LOADING
 # ══════════════════════════════════════════════════════════════════════════════
@@ -838,8 +849,9 @@ if view == "Retail Sales":
         fig_pat.add_trace(go.Bar(
             name="Returning", x=[m["month"] for m in EXEC_MONTHLY], y=[m["returning"] for m in EXEC_MONTHLY],
             marker_color="#d97706", hovertemplate="%{x}<br>%{y} returning<extra></extra>"))
-        fig_pat.update_layout(barmode="stack", legend=dict(orientation="h", y=1.15), yaxis_title="")
+        fig_pat.update_layout(barmode="stack", yaxis_title="")
         chart_layout(fig_pat, "Unique Patients — New vs Returning", height=300)
+        legend_below_title(fig_pat)
         st.plotly_chart(fig_pat, use_container_width=True)
 
     # Store-level door breakdown — June (last full month) vs July MTD
@@ -1110,8 +1122,9 @@ if view == "Retail Sales":
                     marker=dict(size=5),
                     hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>" + store + "</extra>",
                 ))
-            fig_wk.update_layout(legend=dict(orientation="h", y=1.12), yaxis_title="")
+            fig_wk.update_layout(yaxis_title="")
             chart_layout(fig_wk, "Weekly Gross Revenue by Store", height=340)
+            legend_below_title(fig_wk)
             st.plotly_chart(fig_wk, use_container_width=True)
 
         # ── In-store vs Delivery ───────────────────────────────────────────────
@@ -1152,9 +1165,9 @@ if view == "Retail Sales":
                 fig_pm.add_trace(go.Bar(
                     name="Delivery", x=pmw["week"], y=pmw["Delivery"], marker_color="#059669",
                     hovertemplate="%{x|%b %-d}  $%{y:,.0f}<extra>Delivery</extra>"))
-                fig_pm.update_layout(barmode="stack", legend=dict(orientation="h", y=1.15),
-                                     yaxis_title="")
+                fig_pm.update_layout(barmode="stack", yaxis_title="")
                 chart_layout(fig_pm, "Weekly Revenue — In-Store vs Delivery", height=320)
+                legend_below_title(fig_pm)
                 st.plotly_chart(fig_pm, use_container_width=True)
 
         with col_demo:
@@ -1169,9 +1182,9 @@ if view == "Retail Sales":
                         name={"M": "Male", "F": "Female"}[gender],
                         x=d["age"], y=d["gross"].fillna(0), marker_color=color,
                         hovertemplate="%{x}  $%{y:,.0f}<extra>" + gender + "</extra>"))
-                fig_dm.update_layout(barmode="stack", legend=dict(orientation="h", y=1.15),
-                                     yaxis_title="")
+                fig_dm.update_layout(barmode="stack", yaxis_title="")
                 chart_layout(fig_dm, "Revenue by Age Group & Gender", height=320)
+                legend_below_title(fig_dm)
                 st.plotly_chart(fig_dm, use_container_width=True)
 
         # ── Sales by weekday × hour heatmap ────────────────────────────────────
