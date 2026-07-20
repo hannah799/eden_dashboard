@@ -310,37 +310,132 @@ inv_df, bio_df, sw_df, al_df = load_data()
 store_df = load_store_sales()
 
 
+# ── Monday.com board exports (monday_reports_july_19/) ─────────────────────────
+MONDAY_DIR = "monday_reports_july_19"
+
+def _parse_monday(path):
+    """Monday.com board export → list of dicts keyed by column header.
+    Skips the board title/description rows, repeated 'Name' header rows,
+    'Subitems' sub-table headers, and group-title rows (single populated cell).
+    Each returned row carries `_group` = the most recent group title."""
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb.active
+    rows = [list(r) for r in ws.iter_rows(values_only=True)]
+    wb.close()
+    header = None
+    group = None
+    out = []
+    for r in rows:
+        if not r or all(c is None for c in r):
+            continue
+        if r[0] in ("Name", "Subitems"):        # header / subitem-header row
+            if r[0] == "Name":
+                header = [str(h) for h in r]
+            continue
+        nonnull = [c for c in r if c is not None]
+        if len(nonnull) == 1 and r[0] is not None:   # group title
+            group = str(r[0])
+            continue
+        if header is None:
+            continue
+        d = {header[i]: (r[i] if i < len(r) else None) for i in range(len(header))}
+        d["_group"] = group
+        out.append(d)
+    return out
+
+def _mnum(x):
+    return float(x) if isinstance(x, (int, float)) else None
+
+
 @st.cache_data(ttl=300)
 def load_harvest():
-    wb2 = openpyxl.load_workbook("harvest_tracker.xlsx", read_only=True, data_only=True)
-    ws5 = wb2["harvest tracker"]
-    h_rows = list(ws5.iter_rows(values_only=True))
+    # Sourced from the Monday "Harvest Tracker" board export. Rows are strain-
+    # level within a cycle; the blank-name cycle-summary rows are dropped so the
+    # per-strain weights (which is what every downstream chart expects) are used.
+    raw = _parse_monday(os.path.join(MONDAY_DIR, "Harvest_Tracker_1784506120.xlsx"))
     h_records = []
-    for r in h_rows[1:]:
-        r = list(r) + [None] * 40
+    for d in raw:
+        name = d.get("Name")
+        if not name or str(name).strip() == "":
+            continue
+        hd = d.get("Date of Harvest")
+        td = d.get("Test Date")
         h_records.append({
-            "strain":           r[0],
-            "harvest_date":     r[2] if hasattr(r[2], "year") else None,
-            "status":           r[3],
-            "cycle":            r[4],
-            "room":             r[5],
-            "num_plants":       float(r[6])  if r[6]  else None,
-            "fresh_frozen_g":   float(r[7])  if r[7]  else None,
-            "wet_weight_g":     float(r[9])  if r[9]  else None,
-            "dry_weight_g":     float(r[12]) if r[12] else None,
-            "sf_canopy":        float(r[13]) if r[13] else None,
-            "grams_per_sf":     float(r[14]) if r[14] else None,
-            "trim_weight_g":    float(r[15]) if r[15] else None,
-            "trimmed_flower_g": float(r[16]) if r[16] else None,
-            "est_35_units":     float(r[18]) if r[18] else None,
-            "est_1g_units":     float(r[19]) if r[19] else None,
-            "designation":      r[21],
-            "thc_pct":          float(r[24]) if r[24] else None,
-            "terps_pct":        float(r[25]) if r[25] else None,
-            "test_date":        r[26] if hasattr(r[26], "year") else None,
-            "grade":            r[27],
+            "strain":           name,
+            "harvest_date":     hd if hasattr(hd, "year") else None,
+            "status":           d.get("Status"),
+            "cycle":            d.get("Cycle #"),
+            "room":             d.get("Flower Room"),
+            "num_plants":       _mnum(d.get("# of Plants")),
+            "fresh_frozen_g":   _mnum(d.get("Fresh Frozen Weight")),
+            "wet_weight_g":     _mnum(d.get("Wet Weight")),
+            "dry_weight_g":     _mnum(d.get("Dry Weight Actual")),
+            "sf_canopy":        _mnum(d.get("SF")),
+            "grams_per_sf":     _mnum(d.get("Gr/ SF Actual")),
+            "trim_weight_g":    _mnum(d.get("Trim Weight")),
+            "trimmed_flower_g": _mnum(d.get("Trimmed Flower")),
+            "est_35_units":     _mnum(d.get("Est. 3.5g units")),
+            "est_1g_units":     _mnum(d.get("Est. 1g units")),
+            "designation":      d.get("Designation"),
+            "thc_pct":          _mnum(d.get("THC%")),
+            "terps_pct":        _mnum(d.get("TOTAL TERPS%")),
+            "test_date":        td if hasattr(td, "year") else None,
+            "grade":            d.get("Grade"),
         })
     return pd.DataFrame(h_records)
+
+
+@st.cache_data(ttl=300)
+def load_monday_inventory():
+    """Production supplies (reorder status) + finished-goods batch tracker."""
+    out = {}
+
+    # ── Production supplies ────────────────────────────────────────────────────
+    sup_raw = _parse_monday(os.path.join(MONDAY_DIR,
+                                          "Inventory_Management_Production_1784506111.xlsx"))
+    sup = []
+    for d in sup_raw:
+        if not d.get("Name") or d.get("Status") not in (
+                "Reorder Needed", "Emergency Order Needed", "Sufficient"):
+            continue
+        sup.append({
+            "item": d.get("Name"), "unit": d.get("Unit Type"),
+            "on_hand": _mnum(d.get("Count on Hand")),
+            "reorder_level": _mnum(d.get("Reorder Level")),
+            "max_level": _mnum(d.get("Max Level")),
+            "status": d.get("Status"), "vendor": d.get("Regular Vendor"),
+        })
+    out["supplies"] = pd.DataFrame(sup)
+
+    # ── Finished goods batches ─────────────────────────────────────────────────
+    fg_raw = _parse_monday(os.path.join(MONDAY_DIR,
+                                        "Finished_Goods_Tracker_1784506133.xlsx"))
+    fg = []
+    for d in fg_raw:
+        if not d.get("Name"):
+            continue
+        exp = d.get("Expiration Date")
+        fg.append({
+            "product": d.get("Name"), "group": d.get("_group"),
+            "category": d.get("Product Category"),
+            "strain": d.get("Strain/Flavor"), "size": d.get("Size"),
+            "on_hand": _mnum(d.get("QTY - ON HAND")) or 0,
+            "product_status": d.get("Product Status"),
+            "pass_fail": d.get("Pass/Fail"),
+            "thc_pct": _mnum(d.get("THC%")),
+            "days_to_exp": _mnum(d.get("Days until Expiration")),
+            "exp_date": exp if hasattr(exp, "year") else None,
+        })
+    out["finished_goods"] = pd.DataFrame(fg)
+
+    return out
+
+_monday_inv_error = None
+try:
+    MINV = load_monday_inventory()
+except Exception as e:
+    _monday_inv_error = str(e)
+    MINV = {}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1393,6 +1488,133 @@ if view == "Inventory":
               <p class="data-note">15 fastest-to-stockout SKUs (currently selling) · Headset</p>
             </div>""", unsafe_allow_html=True)
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # MONDAY OPS BOARDS — production supplies reorder + finished-goods batches.
+    # (Source: monday_reports_july_19, exported Jul 16–19 2026.)
+    # ══════════════════════════════════════════════════════════════════════════
+    if _monday_inv_error:
+        st.warning(f"Monday ops boards unavailable: {_monday_inv_error}")
+    elif MINV:
+        # ── Production supplies reorder ────────────────────────────────────────
+        sup = MINV.get("supplies", pd.DataFrame())
+        if not sup.empty:
+            st.divider()
+            st.subheader("Production Supplies")
+            st.caption("Packaging & input inventory vs. reorder levels · Monday Inventory Management board")
+
+            n_emergency = int((sup["status"] == "Emergency Order Needed").sum())
+            n_reorder   = int((sup["status"] == "Reorder Needed").sum())
+            n_ok        = int((sup["status"] == "Sufficient").sum())
+            s1, s2, s3 = st.columns(3)
+            for col, label, value, sub, bg in [
+                (s1, "Emergency Orders", n_emergency, "Below critical level", "#fee2e2"),
+                (s2, "Reorder Needed",   n_reorder,   "Below reorder level",  "#fef3c7"),
+                (s3, "Sufficient",       n_ok,        "At or above target",   "#d1fae5"),
+            ]:
+                with col:
+                    st.markdown(f"""<div class="kpi-card" style="background:{bg};">
+                      <div class="kpi-label">{label}</div>
+                      <div class="kpi-value">{value}</div>
+                      <div class="kpi-sub">{sub}</div>
+                    </div>""", unsafe_allow_html=True)
+            st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+
+            rank = {"Emergency Order Needed": 0, "Reorder Needed": 1, "Sufficient": 2}
+            need = sup[sup["status"] != "Sufficient"].copy()
+            need = need.sort_values(by="status", key=lambda s: s.map(rank))
+            rows_html = ""
+            for _, r in need.iterrows():
+                is_emerg = r["status"] == "Emergency Order Needed"
+                badge_bg, badge_fg = ("#fee2e2", "#b91c1c") if is_emerg else ("#fef3c7", "#b45309")
+                label = "Emergency" if is_emerg else "Reorder"
+                oh = f"{int(r['on_hand']):,}" if pd.notna(r["on_hand"]) else "–"
+                rl = f"{int(r['reorder_level']):,}" if pd.notna(r["reorder_level"]) else "–"
+                rows_html += (
+                    f"<tr><td>{r['item']}</td>"
+                    f"<td><span style='background:{badge_bg};color:{badge_fg};padding:2px 8px;"
+                    f"border-radius:6px;font-size:0.72rem;font-weight:700;'>{label}</span></td>"
+                    f"<td style='text-align:right;'>{oh}</td>"
+                    f"<td style='text-align:right;'>{rl}</td>"
+                    f"<td>{r['vendor'] or '–'}</td></tr>"
+                )
+            st.markdown(f"""<div class="data-card" style="height:auto;">
+              <table class="data-table">
+                <thead><tr>
+                  <th>Supply Item</th><th>Status</th>
+                  <th style="text-align:right;">On Hand</th>
+                  <th style="text-align:right;">Reorder Level</th>
+                  <th>Vendor</th>
+                </tr></thead>
+                <tbody>{rows_html}</tbody>
+              </table>
+              <p class="data-note">{n_emergency + n_reorder} items need ordering · placed Tuesdays weekly</p>
+            </div>""", unsafe_allow_html=True)
+
+        # ── Finished-goods batches & expiry ────────────────────────────────────
+        fg = MINV.get("finished_goods", pd.DataFrame())
+        if not fg.empty:
+            st.divider()
+            st.subheader("Finished Goods Batches")
+            st.caption("Batch-level stock, testing & expiration · Monday Finished Goods Tracker")
+
+            HIST = {"Expired Products", "Sold Out"}
+            live = fg[~fg["group"].isin(HIST)].copy()
+
+            col_fgcat, col_exp = st.columns([2, 3])
+            with col_fgcat:
+                by_cat = (live[live["on_hand"] > 0].groupby("group")["on_hand"].sum()
+                          .reset_index().sort_values("on_hand", ascending=True))
+                fig_fg = go.Figure(go.Bar(
+                    x=by_cat["on_hand"], y=by_cat["group"], orientation="h",
+                    marker_color="#2d6a4f",
+                    text=by_cat["on_hand"].apply(lambda x: f"{int(x):,}"),
+                    textposition="outside", cliponaxis=False,
+                    hovertemplate="%{y}<br>%{x:,.0f} units on hand<extra></extra>",
+                ))
+                chart_layout(fig_fg, "On-Hand Units by Product Type", height=340)
+                fig_fg.update_layout(
+                    xaxis=dict(range=[0, by_cat["on_hand"].max() * 1.2]),
+                    yaxis=dict(gridcolor="rgba(0,0,0,0)"),
+                    margin=dict(l=10, r=60, t=40, b=10),
+                )
+                st.plotly_chart(fig_fg, use_container_width=True)
+
+            with col_exp:
+                soon = fg[(fg["days_to_exp"].notna()) & (fg["on_hand"] > 0)
+                          & (fg["days_to_exp"] <= 90)].copy()
+                soon = soon.sort_values("days_to_exp").head(12)
+                if soon.empty:
+                    st.markdown("""<div class="data-card" style="height:340px;justify-content:center;">
+                      <p class="data-note" style="text-align:center;font-size:0.85rem;">
+                      No in-stock batches expiring within 90 days ✓</p></div>""",
+                                unsafe_allow_html=True)
+                else:
+                    rows_html = ""
+                    for _, r in soon.iterrows():
+                        d = int(r["days_to_exp"])
+                        if d < 0:
+                            badge = f"<span style='color:#b91c1c;font-weight:700;'>Expired {abs(d)}d</span>"
+                        elif d <= 30:
+                            badge = f"<span style='color:#b91c1c;font-weight:700;'>{d}d</span>"
+                        else:
+                            badge = f"<span style='color:#b45309;font-weight:600;'>{d}d</span>"
+                        rows_html += (
+                            f"<tr><td>{r['product']}</td><td>{r['group']}</td>"
+                            f"<td style='text-align:right;'>{int(r['on_hand']):,}</td>"
+                            f"<td style='text-align:right;'>{badge}</td></tr>"
+                        )
+                    st.markdown(f"""<div class="data-card" style="height:auto;min-height:340px;">
+                      <table class="data-table">
+                        <thead><tr>
+                          <th>Batch</th><th>Type</th>
+                          <th style="text-align:right;">On Hand</th>
+                          <th style="text-align:right;">Expires</th>
+                        </tr></thead>
+                        <tbody>{rows_html}</tbody>
+                      </table>
+                      <p class="data-note">In-stock batches expiring within 90 days (negative = already expired)</p>
+                    </div>""", unsafe_allow_html=True)
+
 
 if view == "Harvest":
 
@@ -1437,13 +1659,15 @@ if view == "Harvest":
     total_wet_lbs = harvested["wet_lbs"].sum()
     avg_dry_ratio = (total_dry_lbs / total_wet_lbs * 100) if total_wet_lbs > 0 else 0
     avg_per_plant = (harvested["dry_weight_g"] / harvested["num_plants"]).dropna().mean() / G_PER_LB
+    _hdates = harvested["harvest_date"].dropna()
+    _hrange = f"{_hdates.min():%b %Y} – {_hdates.max():%b %Y}" if not _hdates.empty else "All cycles"
 
     h1, h2, h3, h4, h5 = st.columns(5)
     with h1:
         st.markdown(f"""<div class="kpi-hero">
           <div class="kpi-label-hero">Cycles Harvested</div>
           <div class="kpi-value-hero">{total_cycles}</div>
-          <div class="kpi-sub-hero">Nov 2024 – Jun 2026</div>
+          <div class="kpi-sub-hero">{_hrange}</div>
         </div>""", unsafe_allow_html=True)
     for col, label, value, sub in [
         (h2, "Total Dry Yield",    f"{total_dry_lbs:,.0f} lbs", "All cycles"),
