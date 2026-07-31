@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from collections import defaultdict
@@ -251,6 +252,83 @@ def load_weekly_cpa(path=CPA_WEEKLY_FILE):
             a["gross"] += gross or 0
             a["txns"] += 1
     return {"span": span, "stores": agg}
+
+# ── Discounting — Sweed "Sales v2" line-item export + Loyalty balance export ───
+# Sales v2 is one row per basket line (store, timestamp, transaction, budtender,
+# customer, product, category, gross, net, discount, points). "Net" here is
+# gross − discount (no licensed-product fee), the same definition the Power BI
+# door tables use, so EXEC_DOORS months are comparable month-over-month.
+# Refresh: drop the new exports in the repo root and update the two paths below.
+SALES_V2_FILE = "Sales v2 2026-07-01 - 2026-07-31 (1).xlsx"
+LOYALTY_FILE  = "Loyalty 2026-07-01 - 2026-07-31.xlsx"
+
+# Ordinal ramp for week-over-week marks (light → dark, ΔL ≥ 0.06 per step,
+# lightest step clears 2:1 on white). Sequential = one hue, never a rainbow.
+WEEK_RAMP = ["#74c69d", "#40916c", "#2d6a4f", "#1b4332"]
+
+
+@st.cache_data(ttl=300)
+def load_discounts(path=SALES_V2_FILE, loyalty_path=LOYALTY_FILE):
+    """Line-level sales with discounts, bucketed into 7-day periods.
+
+    The workbook's first data row is a grand-total row (blank Store) — dropped,
+    but kept aside as a tie-out check. Returns None when the export is absent.
+    """
+    if not os.path.exists(path):
+        return None
+    d = pd.read_excel(path, sheet_name="AdvancedReport", header=10)
+    if d.empty or "Total discount amount" not in d.columns:
+        return None
+    d = d[d["Store"].notna()].copy()
+    if d.empty:
+        return None
+
+    d["store"]   = d["Store"].astype(str).str.replace("Eden - ", "", regex=False).str.strip()
+    d["ts"]      = pd.to_datetime(d["Timestamp"], errors="coerce")
+    d = d[d["ts"].notna()]
+    d["date"]    = d["ts"].dt.normalize()
+    d["gross"]   = pd.to_numeric(d["Gross sales"], errors="coerce").fillna(0.0)
+    d["net"]     = pd.to_numeric(d["Net sales"], errors="coerce").fillna(0.0)
+    d["disc"]    = pd.to_numeric(d["Total discount amount"], errors="coerce").fillna(0.0)
+    d["qty"]     = pd.to_numeric(d["Products sold QTY"], errors="coerce").fillna(0)
+    d["pts_red"] = pd.to_numeric(d["Points redeemed, pts"], errors="coerce").fillna(0.0)
+    d["cat"]     = d["Product category"].fillna("Uncategorised").astype(str)
+    d["bt"]      = d["Budtender"].fillna("—").astype(str)
+
+    # Line-level discount depth. Refund/return lines carry gross 0 (net < 0), so
+    # a rate is undefined there — those stay NaN and drop out of the depth mix.
+    d["rate"] = np.where(d["gross"] > 0, d["disc"] / d["gross"] * 100, np.nan)
+
+    # 7-day periods anchored on the 1st, so buckets don't split on the export's
+    # partial calendar weeks. The final bucket is short when the export stops
+    # mid-period (this one ends Jul 27).
+    start = d["date"].min()
+    d["wk"] = ((d["date"] - start).dt.days // 7).clip(upper=3)
+    wk_span = {}
+    for w, grp in d.groupby("wk"):
+        a, b = grp["date"].min(), grp["date"].max()
+        wk_span[int(w)] = (f"{_MONTHS[a.month - 1]} {a.day}–{b.day}" if a.month == b.month
+                           else f"{_MONTHS[a.month - 1]} {a.day}–{_MONTHS[b.month - 1]} {b.day}")
+
+    lo, hi = d["date"].min(), d["date"].max()
+    span = (f"{_MONTHS[lo.month - 1]} {lo.day}–{hi.day}, {hi.year}" if lo.month == hi.month
+            else f"{_MONTHS[lo.month - 1]} {lo.day} – {_MONTHS[hi.month - 1]} {hi.day}, {hi.year}")
+
+    # Loyalty points liability (optional companion export, one row per patient).
+    loyalty = None
+    if os.path.exists(loyalty_path):
+        ly = pd.read_excel(loyalty_path, sheet_name="AdvancedReport", header=10)
+        ly = ly[ly["Patient id"].notna()]
+        if not ly.empty:
+            loyalty = {
+                "patients": int(ly["Patient id"].nunique()),
+                "start":    float(ly["Starting balance"].sum()),
+                "end":      float(ly["Ending balance"].sum()),
+                "net_pts":  float(ly["Loyalty points"].sum()),
+            }
+
+    return {"df": d, "span": span, "wk_span": wk_span, "loyalty": loyalty,
+            "days": int((hi - lo).days) + 1}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PLAN OF RECORD — Eden Plan.v5 (1).xlsx → Growth Curve tab (logistic ramp,
@@ -1007,6 +1085,258 @@ if view == "Retail Sales":
         </div>""", unsafe_allow_html=True)
 
     st.divider()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # DISCOUNTING & PROMOTIONS — Sweed "Sales v2" line-item export
+    # ══════════════════════════════════════════════════════════════════════════
+    _dc = load_discounts()
+    if _dc:
+        dd  = _dc["df"]
+        _wk_span = _dc["wk_span"]
+
+        _gross = dd["gross"].sum()
+        _disc  = dd["disc"].sum()
+        _net   = dd["net"].sum()
+        _rate  = _disc / _gross * 100 if _gross else 0
+        _txns  = dd["Transaction"].nunique()
+
+        # June blended rate from the Power BI door tables — same (gross − net) ÷
+        # gross definition as this export, so the two months are comparable.
+        _jun_g = sum(r[1] for r in EXEC_DOORS["Jun 2026"])
+        _jun_n = sum(r[2] for r in EXEC_DOORS["Jun 2026"])
+        _jun_rate = (_jun_g - _jun_n) / _jun_g * 100 if _jun_g else 0
+
+        st.subheader("Discounting & Promotions")
+        st.caption(
+            f"Sweed \"Sales v2\" line-item export · {_dc['span']} "
+            f"({_dc['days']} days, all 5 doors) · the export stops at its Jul 27 run date, "
+            f"so this is not the full month. Discount rate = discount ÷ gross."
+        )
+
+        d1, d2, d3, d4, d5 = st.columns(5)
+        _delta = _rate - _jun_rate
+        with d1:
+            st.markdown(f"""<div class="kpi-hero">
+              <div class="kpi-label-hero">Discount Rate</div>
+              <div class="kpi-value-hero">{_rate:.1f}%</div>
+              <div class="kpi-sub-hero">June blended: {_jun_rate:.1f}% ({_delta:+.1f} pts)</div>
+            </div>""", unsafe_allow_html=True)
+        _pts_red = dd["pts_red"].sum()
+        _loy = _dc["loyalty"]
+        _loy_sub = (f"${_loy['end']:,.0f} points liability" if _loy else "Points redeemed on baskets")
+        for col, label, value, sub in [
+            (d2, "Discounts Given",  f"${_disc:,.0f}",  f"on ${_gross:,.0f} gross"),
+            (d3, "Net Sales",        f"${_net:,.0f}",   f"{_net / _gross * 100:.0f}% of menu price kept" if _gross else "–"),
+            (d4, "Avg Basket",       f"${_net / _txns:,.0f}" if _txns else "–",
+                                     f"{_txns:,} transactions"),
+            (d5, "Loyalty Redeemed", f"{_pts_red:,.0f} pts", _loy_sub),
+        ]:
+            with col:
+                st.markdown(f"""<div class="kpi-card">
+                  <div class="kpi-label">{label}</div>
+                  <div class="kpi-value">{value}</div>
+                  <div class="kpi-sub">{sub}</div>
+                </div>""", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+
+        # ── Headline: daily discount rate + 7-day average vs the plan assumption ─
+        day = (dd.groupby("date")
+                 .agg(gross=("gross", "sum"), disc=("disc", "sum"))
+                 .reset_index()
+                 .sort_values("date"))
+        day["rate"] = np.where(day["gross"] > 0, day["disc"] / day["gross"] * 100, np.nan)
+        # Rolling average on the ratio of the sums, not the mean of daily rates —
+        # a $1.4k Sunday must not swing the trend as hard as a $12k Friday.
+        day["roll"] = (day["disc"].rolling(7, min_periods=3).sum()
+                       / day["gross"].rolling(7, min_periods=3).sum() * 100)
+
+        fig_dt = go.Figure()
+        fig_dt.add_hline(
+            y=10, line=dict(color="#9ca3af", width=1.5, dash="dash"),
+            annotation_text="Plan assumption · 10%", annotation_position="top left",
+            annotation_font=dict(color="#6b7280", size=10),
+        )
+        fig_dt.add_trace(go.Scatter(
+            name="Daily rate", x=day["date"], y=day["rate"], mode="lines+markers",
+            line=dict(color="#74c69d", width=2), marker=dict(size=5),
+            hovertemplate="%{x|%b %-d}<br>%{y:.1f}% discounted<extra></extra>",
+        ))
+        fig_dt.add_trace(go.Scatter(
+            name="7-day average", x=day["date"], y=day["roll"], mode="lines",
+            line=dict(color="#1a4731", width=3),
+            hovertemplate="%{x|%b %-d}<br>%{y:.1f}% (7-day avg)<extra></extra>",
+        ))
+        # Direct-label the endpoints of the trend line rather than every point.
+        # Start label sits below the line, end label above, so neither lands on it.
+        _rl = day.dropna(subset=["roll"])
+        if len(_rl) >= 2:
+            for _r, _pos in ((_rl.iloc[0], "bottom center"), (_rl.iloc[-1], "top center")):
+                fig_dt.add_trace(go.Scatter(
+                    x=[_r["date"]], y=[_r["roll"]], mode="markers+text",
+                    marker=dict(color="#1a4731", size=9, line=dict(color="#ffffff", width=2)),
+                    text=[f"{_r['roll']:.0f}%"], textposition=_pos,
+                    textfont=dict(color="#111827", size=11),
+                    showlegend=False, hoverinfo="skip",
+                ))
+
+        # The export ran mid-morning on its last day, so that day is a stub —
+        # call it out rather than let the reader see a collapse in discounting.
+        _last_day = day.iloc[-1]
+        _part_day = _last_day["gross"] < 0.4 * day["gross"].median()
+        if _part_day:
+            fig_dt.add_annotation(
+                x=_last_day["date"], y=_last_day["rate"], text="part-day",
+                showarrow=True, arrowhead=0, arrowcolor="#9ca3af", arrowwidth=1,
+                ax=0, ay=28, font=dict(color="#6b7280", size=10),
+            )
+        chart_layout(fig_dt, f"Discount Rate — Daily Trend  ·  {_dc['span']}", height=360)
+        legend_below_title(fig_dt)
+        fig_dt.update_layout(
+            yaxis=dict(ticksuffix="%", range=[0, max(45, day["rate"].max() * 1.15)]),
+            xaxis=dict(tickformat="%b %-d"), hovermode="x unified",
+        )
+        st.plotly_chart(fig_dt, use_container_width=True)
+
+        _first_wk = dd[dd["wk"] == 0]
+        _last_wk  = dd[dd["wk"] == dd["wk"].max()]
+        _fr = _first_wk["disc"].sum() / _first_wk["gross"].sum() * 100 if _first_wk["gross"].sum() else 0
+        _lr = _last_wk["disc"].sum() / _last_wk["gross"].sum() * 100 if _last_wk["gross"].sum() else 0
+        st.markdown(
+            f"<p class='data-note' style='margin:-6px 0 12px 2px;'>Discounting deepened through the month — "
+            f"{_fr:.0f}% of gross in {_wk_span.get(0, 'week 1')} to {_lr:.0f}% in {_wk_span.get(dd['wk'].max(), 'the final week')}. "
+            f"At the period rate, every $1.00 of menu price collects ${(100 - _rate) / 100:.2f}."
+            + (f" The last day is a stub — the export ran that morning, so its dip is a "
+               f"reporting artefact, not a change in discounting." if _part_day else "")
+            + "</p>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Store × week, and category depth ────────────────────────────────────
+        c_left, c_right = st.columns(2)
+
+        with c_left:
+            sw = dd.pivot_table(index="store", columns="wk", values=["gross", "disc"], aggfunc="sum")
+            _order = ["Cocoa Beach", "Sarasota", "Orlando", "Tampa", "Delivery Hub"]
+            sw = sw.reindex([s for s in _order if s in sw.index]
+                            + [s for s in sw.index if s not in _order])
+            fig_sw = go.Figure()
+            for w in sorted(_wk_span):
+                if ("gross", w) not in sw.columns:
+                    continue
+                _g = sw[("gross", w)]
+                _vals = (sw[("disc", w)] / _g.replace(0, np.nan) * 100)
+                fig_sw.add_trace(go.Bar(
+                    name=_wk_span[w], x=sw.index, y=_vals,
+                    marker=dict(color=WEEK_RAMP[w % len(WEEK_RAMP)],
+                                line=dict(color=CHART_BG, width=2)),
+                    customdata=np.stack([_g.values], axis=-1),
+                    hovertemplate="%{x} · " + _wk_span[w]
+                                  + "<br>%{y:.1f}% discounted<br>$%{customdata[0]:,.0f} gross<extra></extra>",
+                ))
+            chart_layout(fig_sw, "Discount Rate by Store — Week over Week", height=340)
+            legend_below_title(fig_sw)
+            fig_sw.update_layout(barmode="group", bargap=0.28, bargroupgap=0.04,
+                                 yaxis=dict(ticksuffix="%"))
+            st.plotly_chart(fig_sw, use_container_width=True)
+
+        with c_right:
+            cat = (dd.groupby("cat")
+                     .agg(gross=("gross", "sum"), disc=("disc", "sum"), qty=("qty", "sum"))
+                     .query("gross > 0"))
+            cat["rate"] = cat["disc"] / cat["gross"] * 100
+            cat = cat.sort_values("rate")
+            fig_ct = go.Figure(go.Bar(
+                x=cat["rate"], y=cat.index, orientation="h",
+                marker=dict(color="#2d6a4f", line=dict(color=CHART_BG, width=2)),
+                text=[f"{v:.0f}%" for v in cat["rate"]], textposition="outside",
+                cliponaxis=False, textfont=dict(color="#111827", size=11),
+                customdata=np.stack([cat["gross"], cat["disc"]], axis=-1),
+                hovertemplate="%{y}<br>%{x:.1f}% discounted"
+                              "<br>$%{customdata[0]:,.0f} gross · $%{customdata[1]:,.0f} given<extra></extra>",
+            ))
+            chart_layout(fig_ct, "Discount Rate by Category", height=340)
+            fig_ct.update_layout(
+                xaxis=dict(ticksuffix="%", range=[0, cat["rate"].max() * 1.2]),
+                yaxis=dict(gridcolor="rgba(0,0,0,0)"), margin=dict(l=10, r=30, t=40, b=10),
+            )
+            st.plotly_chart(fig_ct, use_container_width=True)
+
+        # ── Where the discount dollars sit: depth mix ────────────────────────────
+        depth = dd.dropna(subset=["rate"]).copy()
+        _edges  = [-0.01, 0.01, 20, 30, 40, 100.01]
+        _labels = ["No discount", "1–20%", "20–30%", "30–40%", "40%+"]
+        depth["band"] = pd.cut(depth["rate"], _edges, labels=_labels)
+        dmix = (depth.groupby("band", observed=False)
+                     .agg(gross=("gross", "sum"), disc=("disc", "sum"), lines=("rate", "size"))
+                     .reindex(_labels))
+        _tot_g = dmix["gross"].sum()
+        dmix["share"] = dmix["gross"] / _tot_g * 100 if _tot_g else 0
+
+        fig_dp = go.Figure(go.Bar(
+            x=dmix.index, y=dmix["share"],
+            marker=dict(color="#2d6a4f", line=dict(color=CHART_BG, width=2)),
+            text=[f"{v:.0f}%" for v in dmix["share"]], textposition="outside",
+            cliponaxis=False, textfont=dict(color="#111827", size=11),
+            customdata=np.stack([dmix["gross"], dmix["disc"], dmix["lines"]], axis=-1),
+            hovertemplate="%{x}<br>%{y:.1f}% of gross"
+                          "<br>$%{customdata[0]:,.0f} gross · $%{customdata[1]:,.0f} discount"
+                          "<br>%{customdata[2]:,} basket lines<extra></extra>",
+        ))
+        chart_layout(fig_dp, "How Deep Are the Discounts — share of gross by discount band", height=300)
+        fig_dp.update_layout(yaxis=dict(ticksuffix="%", range=[0, dmix["share"].max() * 1.25]))
+        st.plotly_chart(fig_dp, use_container_width=True)
+
+        _deep = dmix.loc[["30–40%", "40%+"], "gross"].sum() / _tot_g * 100 if _tot_g else 0
+        _none = dmix.loc["No discount", "gross"] / _tot_g * 100 if _tot_g else 0
+        st.markdown(
+            f"<p class='data-note' style='margin:-6px 0 12px 2px;'>Only {_none:.0f}% of gross sells at full "
+            f"menu price; {_deep:.0f}% is discounted 30% or deeper. Returns and refund lines carry no menu "
+            f"price and are excluded from the band mix.</p>",
+            unsafe_allow_html=True,
+        )
+
+        # ── Budtender discount table ────────────────────────────────────────────
+        bt = (dd.groupby("bt")
+                .agg(gross=("gross", "sum"), disc=("disc", "sum"),
+                     net=("net", "sum"), txns=("Transaction", "nunique")))
+        bt = bt[bt["gross"] >= 1000]
+        if not bt.empty:
+            bt["rate"]   = bt["disc"] / bt["gross"] * 100
+            bt["ticket"] = bt["net"] / bt["txns"].replace(0, np.nan)
+            bt = bt.sort_values("rate", ascending=False)
+            bt_rows = ""
+            for name, r in bt.iterrows():
+                _hi = r["rate"] >= _rate + 2
+                _lo = r["rate"] <= _rate - 2
+                _c  = "#b91c1c" if _hi else "#1a4731" if _lo else "#374151"
+                bt_rows += (
+                    f"<tr><td>{name}</td>"
+                    f"<td style='text-align:right;'>${r['gross']:,.0f}</td>"
+                    f"<td style='text-align:right;'>${r['disc']:,.0f}</td>"
+                    f"<td style='text-align:right;color:{_c};font-weight:600;'>{r['rate']:.1f}%</td>"
+                    f"<td style='text-align:right;'>{int(r['txns']):,}</td>"
+                    f"<td style='text-align:right;'>${r['ticket']:,.0f}</td></tr>"
+                )
+            st.markdown(f"""<div class="data-card" style="height:auto;">
+              <div class="data-card-title">Discounting by Budtender</div>
+              <table class="data-table">
+                <thead><tr>
+                  <th>Budtender</th>
+                  <th style="text-align:right;">Gross</th>
+                  <th style="text-align:right;">Discount $</th>
+                  <th style="text-align:right;">Discount Rate</th>
+                  <th style="text-align:right;">Transactions</th>
+                  <th style="text-align:right;">Avg Ticket</th>
+                </tr></thead>
+                <tbody>{bt_rows}</tbody>
+              </table>
+              <p class="data-note">Staff with at least $1,000 gross in the period, deepest discounter first.
+              Red sits 2+ points above the {_rate:.1f}% company rate, green 2+ points below.
+              Avg ticket = net ÷ transactions.</p>
+            </div>""", unsafe_allow_html=True)
+
+        st.divider()
 
     # ── Filters ───────────────────────────────────────────────────────────────
     _cat_opts   = _options(sw_dedup["category"], al_notampa["cat_norm"], store_df["category"])
